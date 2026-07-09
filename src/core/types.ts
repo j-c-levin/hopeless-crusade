@@ -25,3 +25,32 @@ export const COLOUR_ELEMENT: Record<Colour, Element> = {
 export const ELEMENT_COLOUR: Record<Element, Colour> = {
   fire: 'red', earth: 'yellow', air: 'blue', water: 'green',
 };
+
+export interface Enemy {
+  id: string; suit: Suit; rank: RankClass;
+  hp: number; maxHp: number; power: number;
+  attachments: { cardId: string; defId: string }[];
+  echoed: boolean;                      // war-manifestation respawn used
+}
+export interface EnemySpec { suit: Suit; rank: RankClass; hp: number }
+export interface PendingChoice {
+  id: string; prompt: string; options: { id: string; label: string }[];
+}
+export interface CombatState {
+  outcome: 'ongoing' | 'won' | 'lost';
+  round: number; hp: number; handSize: number; block: number;
+  hand: Card[]; drawPile: Card[]; discardPile: Card[];
+  attachedCards: Card[]; defenders: { cardId: string; defId: string; hp: number }[];
+  enemies: Enemy[];
+  activatedThisRound: string[];               // card ids
+  activationCounts: Record<string, number>;   // defId -> activations this round
+  charges: Record<string, number>;            // defId -> persistent charges
+  freeMerges: number; freeDecombines: number;
+  scrapSealed: boolean; lockedElements: Element[];
+  smokeHits: string[];                        // enemy ids hit by smoke this round
+  plagueAura: boolean;                        // disease manifestation
+  clock?: number;                             // famine manifestation countdown
+  deathCounter: number;
+  struggles: string[]; relics: string[];
+  pendingChoice?: PendingChoice;
+}
