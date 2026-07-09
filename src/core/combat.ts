@@ -1,10 +1,20 @@
 import { CONFIG } from '../content/config';
 import { elementDef } from '../content/elements';
-import { nextId, type IdGen } from './cards';
+import { findCard, nextId, removeCard, type IdGen } from './cards';
+import { forgeTier2, forgeTier3, tier2Target, tier3DefId } from './forge';
 import type { Rng } from './rng';
 import type {
   Card, CombatState, Enemy, EnemySpec, ForgedCard, GameEvent,
 } from './types';
+
+export type CombatCommand =
+  | { type: 'scrap'; cardId: string; targetEnemyId?: string; mergeCardIds?: string[] }
+  | { type: 'activate'; cardId: string; fuelIds: string[]; targetEnemyId?: string;
+      decombineTargetId?: string; burnConstituentId?: string; discardIds?: string[] }  // Task 9
+  | { type: 'decombine'; cardId: string; burnConstituentId?: string }                  // Task 10 (freeDecombines)
+  | { type: 'hailMary'; cardIds: string[]; targetEnemyId: string }
+  | { type: 'resolveChoice'; optionId: string }                                        // Task 12
+  | { type: 'endTurn' };
 
 export function startCombat(opts: {
   deck: Card[]; hp: number; handSize: number;
@@ -147,4 +157,102 @@ export function checkOutcome(cs: CombatState): void {
   if (cs.hp <= 0) cs.outcome = 'lost';
   else if (cs.deathCounter >= CONFIG.deathCounterThreshold) cs.outcome = 'lost';
   else if (cs.enemies.every((e) => e.hp <= 0)) cs.outcome = 'won';
+}
+
+export function combatCommand(
+  cs: CombatState, rng: Rng, idGen: IdGen, cmd: CombatCommand,
+): GameEvent[] {
+  const events: GameEvent[] = [];
+  if (cs.outcome !== 'ongoing') throw new Error('illegal: combat over');
+  if (cs.pendingChoice && cmd.type !== 'resolveChoice') throw new Error('illegal: choice pending');
+  switch (cmd.type) {
+    case 'scrap': doScrap(cs, rng, idGen, cmd, events); break;
+    case 'hailMary': doHailMary(cs, cmd, events); break;
+    case 'endTurn': endTurn(cs, rng, idGen, events); break;
+    case 'activate': doActivate(cs, rng, idGen, cmd, events); break;       // Task 9
+    case 'decombine': doFreeDecombine(cs, cmd, events); break;             // Task 10
+    case 'resolveChoice': throw new Error('illegal: no choice pending');   // Task 12 replaces
+  }
+  return events;
+}
+
+function doScrap(
+  cs: CombatState, rng: Rng, idGen: IdGen,
+  cmd: Extract<CombatCommand, { type: 'scrap' }>, events: GameEvent[],
+): void {
+  if (cs.scrapSealed) throw new Error('illegal: scrapping is sealed');
+  const card = findCard(cs.hand, cmd.cardId);
+  if (card.kind !== 'raw') throw new Error('illegal: only raws scrap');
+  // Task 11 adds: scarred raws cannot scrap; famished raws cost 1 extra raw.
+  removeCard(cs.hand, card.id);
+  cs.discardPile.push(card);
+  events.push({ type: 'scrap', text: `Scrapped a ${card.colour} ${card.value}.`, data: { cardId: card.id } });
+  switch (card.colour) {
+    case 'red': {
+      if (!cmd.targetEnemyId) throw new Error('illegal: red scrap needs a target');
+      dealToEnemy(cs, cmd.targetEnemyId, 1, events);
+      break;
+    }
+    case 'yellow': cs.block += 1; break;
+    case 'blue': drawCards(cs, rng, idGen, 1, events); break;
+    case 'green': {
+      if (!cmd.mergeCardIds?.length) throw new Error('illegal: green scrap needs mergeCardIds');
+      performMerge(cs, idGen, cmd.mergeCardIds, events);
+      break;
+    }
+  }
+}
+
+export function performMerge(
+  cs: CombatState, idGen: IdGen, cardIds: string[], events: GameEvent[],
+): ForgedCard {
+  const cards = cardIds.map((id) => findCard(cs.hand, id));
+  let forged: ForgedCard;
+  if (tier2Target(cards)) {
+    forged = forgeTier2(cards as RawCardArray, nextId(idGen, 'f'));
+  } else if (cards.length === 2 && cards.every((c) => c.kind === 'forged')
+      && tier3DefId(cards[0] as ForgedCard, cards[1] as ForgedCard)) {
+    forged = forgeTier3(cards[0] as ForgedCard, cards[1] as ForgedCard, nextId(idGen, 'f'));
+  } else {
+    throw new Error('illegal: not a valid merge');
+  }
+  for (const id of cardIds) removeCard(cs.hand, id);
+  cs.hand.push(forged);
+  // Task 11 adds plague contagion + plagueAura here.
+  events.push({ type: 'merge', text: `Forged ${forged.defId}.`, data: { defId: forged.defId } });
+  fireCombineDamage(cs, events);
+  return forged;
+}
+type RawCardArray = Parameters<typeof forgeTier2>[0];
+
+function fireCombineDamage(cs: CombatState, events: GameEvent[]): void {
+  const sources = [...cs.hand, ...cs.attachedCards].filter((c) => c.kind === 'forged');
+  for (const s of sources) {
+    const dmg = elementDef((s as ForgedCard).defId).onCombineDamage ?? 0;
+    if (dmg > 0) {
+      const target = lowestHpEnemy(cs);
+      if (target) dealToEnemy(cs, target.id, dmg, events);
+    }
+  }
+}
+
+function doHailMary(
+  cs: CombatState, cmd: Extract<CombatCommand, { type: 'hailMary' }>, events: GameEvent[],
+): void {
+  if (cmd.cardIds.length !== CONFIG.hailMaryBurn) throw new Error('illegal: hail mary burns exactly 3');
+  const cards = cmd.cardIds.map((id) => findCard(cs.hand, id));
+  if (!cards.every((c) => c.kind === 'raw')) throw new Error('illegal: hail mary burns raws');
+  for (const id of cmd.cardIds) removeCard(cs.hand, id); // burned: gone from the run
+  events.push({ type: 'burn', text: 'Three raws burn for one desperate strike.' });
+  dealToEnemy(cs, cmd.targetEnemyId, CONFIG.hailMaryDamage, events);
+}
+
+// placeholders overwritten by Tasks 9–10 (declared so the switch compiles):
+function doActivate(_cs: CombatState, _rng: Rng, _idGen: IdGen,
+  _cmd: Extract<CombatCommand, { type: 'activate' }>, _events: GameEvent[]): void {
+  throw new Error('illegal: not implemented until Task 9');
+}
+function doFreeDecombine(_cs: CombatState,
+  _cmd: Extract<CombatCommand, { type: 'decombine' }>, _events: GameEvent[]): void {
+  throw new Error('illegal: not implemented until Task 10');
 }
