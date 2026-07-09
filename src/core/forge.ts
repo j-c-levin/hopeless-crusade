@@ -24,3 +24,44 @@ export function forgeTier2(cards: RawCard[], id: string): ForgedCard {
     marks: {},
   };
 }
+
+export const PAIR_DEF: Record<string, string> = {
+  'air+air': 'wind',
+  'air+fire': 'smoke',
+  'earth+earth': 'land',
+  'air+earth': 'dust',
+  'earth+fire': 'magma',
+  'earth+water': 'tree',
+  'fire+fire': 'volcano',
+  'water+water': 'lake',
+  'air+water': 'rain',
+  'fire+water': 'steam',
+};
+
+export function tier3DefId(a: ForgedCard, b: ForgedCard): string | null {
+  if (a.tier !== 2 || b.tier !== 2) return null;
+  const elems = [COLOUR_ELEMENT[a.colours[0]!], COLOUR_ELEMENT[b.colours[0]!]].sort();
+  return PAIR_DEF[elems.join('+')] ?? null;
+}
+
+export function forgeTier3(a: ForgedCard, b: ForgedCard, id: string): ForgedCard {
+  const defId = tier3DefId(a, b);
+  if (!defId) throw new Error('illegal tier-3 merge');
+  return {
+    kind: 'forged', id, tier: 3, defId,
+    colours: [...new Set([...a.colours, ...b.colours])].sort(),
+    constituents: [a, b],
+    marks: {},
+  };
+}
+
+export function unmerge(
+  card: ForgedCard,
+  burnConstituentId: string,
+): { returned: Card[]; burned: Card } {
+  const i = card.constituents.findIndex((c) => c.id === burnConstituentId);
+  if (i < 0) throw new Error(`not a constituent: ${burnConstituentId}`);
+  const burned = card.constituents[i]!;
+  const returned = card.constituents.filter((_, j) => j !== i);
+  return { returned, burned };
+}
