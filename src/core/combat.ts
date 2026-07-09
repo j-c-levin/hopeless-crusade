@@ -128,6 +128,10 @@ export function endTurn(cs: CombatState, rng: Rng, idGen: IdGen, events: GameEve
   cs.activatedThisRound = []; cs.activationCounts = {}; cs.smokeHits = [];
   cs.freeMerges = 0; cs.freeDecombines = 0;
   cs.scrapSealed = false; cs.lockedElements = [];
+  // Resolve any win/loss from this turn's retaliation before the clock can act:
+  // all enemies dead = won, and a clock hitting 0 must not overwrite that.
+  checkOutcome(cs);
+  if (cs.outcome !== 'ongoing') return;
   if (cs.clock !== undefined) {
     cs.clock -= 1;
     if (cs.clock <= 0) { cs.outcome = 'lost'; events.push({ type: 'clock-out', text: 'Time starves out.' }); return; }

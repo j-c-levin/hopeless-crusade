@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { Rng } from '../../src/core/rng';
 import { makeStartingDeck } from '../../src/core/cards';
 import { startCombat, endTurn, dealToEnemy, drawCards } from '../../src/core/combat';
-import type { GameEvent } from '../../src/core/types';
+import type { ForgedCard, GameEvent } from '../../src/core/types';
 
 const setup = (enemyHp = 5) =>
   startCombat({
@@ -43,6 +43,22 @@ describe('combat skeleton', () => {
     cs2.hp = 1;
     endTurn(cs2, new Rng(2), { n: 2000 }, events);
     expect(cs2.outcome).toBe('lost');
+  });
+
+  it('clock loss cannot overwrite a fight won during the same endTurn', () => {
+    const cs = setup(1); // single enemy at 1 hp
+    cs.clock = 1; // famine clock about to expire this turn
+    // Give the enemy a retaliating attachment so retaliation kills it during endTurn.
+    const card: ForgedCard = {
+      kind: 'forged', id: 'f-att', tier: 2, defId: 'earth-7',
+      colours: ['yellow'], constituents: [], marks: {},
+    };
+    cs.attachedCards.push(card);
+    cs.enemies[0]!.attachments.push({ cardId: card.id, defId: 'earth-7' });
+    const events: GameEvent[] = [];
+    endTurn(cs, new Rng(4), { n: 4000 }, events);
+    expect(cs.enemies[0]!.hp).toBeLessThanOrEqual(0);
+    expect(cs.outcome).toBe('won'); // win takes precedence over the clock hitting 0
   });
 
   it('reshuffles discard into draw pile when empty', () => {
