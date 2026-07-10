@@ -1,78 +1,22 @@
-import { nodesInColumn } from '../core/map';
 import type { RunState } from '../core/run';
 import { renderCombat } from './screens/combat';
+import { renderEnding } from './screens/ending';
+import { renderMap } from './screens/map';
+import { renderOrigin } from './screens/origin';
+import { renderRewards } from './screens/rewards';
+import { renderStruggles } from './screens/struggles';
+import { renderWindow } from './screens/window';
 import type { Store } from './store';
 
-// Screens for the pre-/post-combat phases are intentionally minimal here — Task 20 replaces
-// them with proper UIs. originDraft/map/strugglePick get just enough interactivity to reach
-// combat by mouse; everything else is a phase-name header plus a raw JSON dump for inspection.
-
-function renderOriginDraft(run: RunState, dispatch: Store['dispatch']): HTMLElement {
-  const root = document.createElement('div');
-  root.className = 'origin-draft-screen';
-  const options = run.originOptions ?? [];
-  root.innerHTML = `
-    <h2>Choose your origin</h2>
-    <div class="origin-options">
-      ${options.map((id) => `<button data-action="choose-origin" data-def-id="${id}">${id}</button>`).join('')}
-    </div>`;
-  root.addEventListener('click', (ev) => {
-    const el = (ev.target as HTMLElement).closest<HTMLElement>('[data-action="choose-origin"]');
-    if (!el) return;
-    dispatch({ type: 'chooseOrigin', defId: el.dataset.defId! });
-  });
-  return root;
-}
-
-function renderMap(run: RunState, dispatch: Store['dispatch']): HTMLElement {
-  const root = document.createElement('div');
-  root.className = 'map-screen';
-  const nextColumn = (run.map.position ?? -1) + 1;
-  const nodes = nodesInColumn(run.map.current, nextColumn);
-  root.innerHTML = `
-    <h2>Map — level ${run.map.level}, domain ${run.map.current.domain}</h2>
-    <div class="map-nodes">
-      ${nodes.map((n) => `<button data-action="move-to" data-node-id="${n.id}">${n.zone} (${n.id})</button>`).join('')}
-    </div>`;
-  root.addEventListener('click', (ev) => {
-    const el = (ev.target as HTMLElement).closest<HTMLElement>('[data-action="move-to"]');
-    if (!el) return;
-    dispatch({ type: 'moveTo', nodeId: el.dataset.nodeId! });
-  });
-  return root;
-}
-
-function renderStrugglePick(run: RunState, dispatch: Store['dispatch']): HTMLElement {
-  const root = document.createElement('div');
-  root.className = 'struggle-pick-screen';
-  const opts = run.struggleOptions!;
-  root.innerHTML = `
-    <h2>Choose ${opts.pick} struggle(s)</h2>
-    <div class="struggle-options">
-      ${opts.options.map((o) => {
-        const chosen = opts.chosen.includes(o.id);
-        return `<button data-action="toggle-struggle" data-id="${o.id}" class="${chosen ? 'chosen' : ''}">${o.id}</button>`;
-      }).join('')}
-    </div>
-    <button data-action="confirm-struggles" ${opts.chosen.length === opts.pick ? '' : 'disabled'}>Confirm</button>`;
-  root.addEventListener('click', (ev) => {
-    const el = (ev.target as HTMLElement).closest<HTMLElement>('[data-action]');
-    if (!el) return;
-    if (el.dataset.action === 'toggle-struggle') dispatch({ type: 'toggleStruggle', id: el.dataset.id! });
-    if (el.dataset.action === 'confirm-struggles') dispatch({ type: 'confirmStruggles' });
-  });
-  return root;
-}
-
+// Fallback for any phase whose expected substate is missing (shouldn't happen in practice,
+// since runCommand keeps phase and substate in lockstep) — a raw JSON dump for inspection
+// rather than a crash.
 function renderPlaceholder(run: RunState): HTMLElement {
   const root = document.createElement('div');
   root.className = 'placeholder-screen';
-  const relevant = run.phase === 'rewards' ? run.pendingRewards
-    : run.phase === 'forgeWindow' ? run.window
-    : run;
   root.innerHTML = `
     <h2>Phase: ${run.phase}</h2>
-    <pre>${JSON.stringify(relevant, null, 2)}</pre>`;
+    <pre>${JSON.stringify(run, null, 2)}</pre>`;
   return root;
 }
 
@@ -93,13 +37,23 @@ export function render(root: HTMLElement, store: Store): void {
         screen = run.combat ? renderCombat(run, store.dispatch, doRender) : renderPlaceholder(run);
         break;
       case 'originDraft':
-        screen = renderOriginDraft(run, store.dispatch);
+        screen = renderOrigin(run, store.dispatch);
         break;
       case 'map':
         screen = renderMap(run, store.dispatch);
         break;
       case 'strugglePick':
-        screen = renderStrugglePick(run, store.dispatch);
+        screen = renderStruggles(run, store.dispatch);
+        break;
+      case 'rewards':
+        screen = run.pendingRewards ? renderRewards(run, store.dispatch, doRender) : renderPlaceholder(run);
+        break;
+      case 'forgeWindow':
+        screen = run.window ? renderWindow(run, store.dispatch, doRender) : renderPlaceholder(run);
+        break;
+      case 'victory':
+      case 'defeat':
+        screen = renderEnding(run);
         break;
       default:
         screen = renderPlaceholder(run);
