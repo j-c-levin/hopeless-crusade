@@ -1,0 +1,165 @@
+/* Functional dark layout. Grim styling polish is Task 21 — this is deliberately plain. */
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: #14141a;
+  color: #ddd;
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+}
+
+#app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 12px;
+}
+
+button {
+  background: #2a2a33;
+  color: #eee;
+  border: 1px solid #555;
+  border-radius: 3px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+button:hover:not(:disabled) {
+  background: #3a3a45;
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+button.chosen {
+  border-color: #8b8;
+  background: #26332a;
+}
+
+.app-status {
+  min-height: 1.4em;
+  color: #e08a8a;
+  font-weight: bold;
+  margin-bottom: 6px;
+}
+
+.status-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  background: #1c1c24;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 6px 10px;
+  margin-bottom: 10px;
+}
+
+.enemy-row, .hand-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.enemy-panel {
+  border: 2px solid #663;
+  border-radius: 4px;
+  padding: 8px;
+  min-width: 130px;
+  cursor: pointer;
+  background: #201a1a;
+}
+.enemy-panel.selected {
+  border-color: #e0c060;
+  box-shadow: 0 0 4px #e0c060;
+}
+.enemy-panel.dead {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.card {
+  border: 2px solid #666;
+  border-radius: 4px;
+  padding: 6px 8px;
+  min-width: 110px;
+  background: #1a1a20;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.card-red    { border-color: #c0504d; }
+.card-yellow { border-color: #c9b458; }
+.card-blue   { border-color: #4f81bd; }
+.card-green  { border-color: #5a9e5a; }
+.card-forged { border-color: #b58cd6; border-style: double; }
+.card-corruption { border-color: #7a2f2f; background: #241417; }
+
+.card-title { font-weight: bold; }
+.card-marks { display: flex; gap: 3px; flex-wrap: wrap; }
+.mark-badge {
+  font-size: 10px;
+  border: 1px solid #888;
+  border-radius: 2px;
+  padding: 0 3px;
+}
+
+.actions-row {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.picker {
+  border: 1px solid #888;
+  border-radius: 4px;
+  padding: 8px;
+  margin-bottom: 10px;
+  background: #202028;
+}
+.picker-title { font-weight: bold; margin-bottom: 6px; }
+.picker-options { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.picker-subsection { margin: 6px 0; }
+.picker-choice.selected-option {
+  border-color: #e0c060;
+  box-shadow: 0 0 3px #e0c060;
+}
+
+.modal {
+  border: 2px solid #e0c060;
+  border-radius: 4px;
+  padding: 10px;
+  margin-bottom: 10px;
+  background: #2a2418;
+}
+.modal-prompt { margin-bottom: 8px; font-weight: bold; }
+.modal-options { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.event-log {
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 6px 10px;
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 12px;
+  color: #aaa;
+}
+.event-log ul { margin: 4px 0 0 0; padding-left: 18px; }
+
+.placeholder-screen pre {
+  background: #1a1a20;
+  border: 1px solid #444;
+  padding: 8px;
+  overflow-x: auto;
+  max-height: 60vh;
+}
+
+.origin-options, .map-nodes, .struggle-options {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
