@@ -3,6 +3,9 @@ import { elementDef, type Atom } from '../content/elements';
 import { findCard, nextId, removeCard, type IdGen } from './cards';
 import { forgeTier2, forgeTier3, tier2Target, tier3DefId, unmerge } from './forge';
 import { onActivated, onEndOfRound, getDeflection } from './followups';
+import {
+  escalateOnDraw, famishedSurcharge, isScrapBlocked, plagueTouch, scarAdjust,
+} from './marks';
 import type { Rng } from './rng';
 import { COLOUR_ELEMENT } from './types';
 import type {
@@ -10,9 +13,11 @@ import type {
 } from './types';
 
 export type CombatCommand =
-  | { type: 'scrap'; cardId: string; targetEnemyId?: string; mergeCardIds?: string[] }
+  | { type: 'scrap'; cardId: string; targetEnemyId?: string; mergeCardIds?: string[];
+      extraFuelIds?: string[] }                                                        // Task 11 (famished)
   | { type: 'activate'; cardId: string; fuelIds: string[]; targetEnemyId?: string;
-      decombineTargetId?: string; burnConstituentId?: string; discardIds?: string[] }  // Task 9
+      decombineTargetId?: string; burnConstituentId?: string; discardIds?: string[];
+      extraFuelIds?: string[] }                                                        // Task 9 (+ Task 11)
   | { type: 'decombine'; cardId: string; burnConstituentId?: string }                  // Task 10 (freeDecombines)
   | { type: 'hailMary'; cardIds: string[]; targetEnemyId: string }
   | { type: 'resolveChoice'; optionId: string }                                        // Task 12
@@ -67,9 +72,10 @@ export function drawCards(
       // Task 12 replaces this stub with onCorruptionDrawn.
       events.push({ type: 'corruption-drawn', text: 'A corruption card surfaces.' });
       cs.discardPile.push(card);
+    } else if (card.marks.plagued !== undefined || card.marks.doomed !== undefined) {
+      escalateOnDraw(cs, card, events);
     } else {
       cs.hand.push(card);
-      // Task 11 wires mark escalation (plague/doom) here.
     }
     if (source?.kind === 'forged') {
       const dmg = elementDef(source.defId).onDrawDamage ?? 0;
@@ -196,7 +202,19 @@ function doScrap(
   if (cs.scrapSealed) throw new Error('illegal: scrapping is sealed');
   const card = findCard(cs.hand, cmd.cardId);
   if (card.kind !== 'raw') throw new Error('illegal: only raws scrap');
-  // Task 11 adds: scarred raws cannot scrap; famished raws cost 1 extra raw.
+  if (isScrapBlocked(card)) throw new Error('illegal: scarred raws cannot scrap');
+  // Famished raws cost 1 extra any-colour raw, discarded alongside; validate BEFORE mutation.
+  const surcharge = famishedSurcharge(card);
+  const extraFuelIds = cmd.extraFuelIds ?? [];
+  if (extraFuelIds.length !== surcharge) {
+    throw new Error('illegal: famished scrap needs exactly one extra raw');
+  }
+  if (new Set(extraFuelIds).size !== extraFuelIds.length || extraFuelIds.includes(card.id)
+      || extraFuelIds.some((id) => cmd.mergeCardIds?.includes(id))) {
+    throw new Error('illegal: extra fuel must be distinct from the scrapped card and any merge cards');
+  }
+  const extraFuel = extraFuelIds.map((id) => findCard(cs.hand, id));
+  if (!extraFuel.every((f) => f.kind === 'raw')) throw new Error('illegal: extra fuel must be a raw');
   // Validate the colour effect fully BEFORE consuming the card: rejection = no state change.
   if (card.colour === 'red' && !livingEnemy(cs, cmd.targetEnemyId)) {
     throw new Error('illegal: red scrap needs a living target');
@@ -208,6 +226,7 @@ function doScrap(
   }
   removeCard(cs.hand, card.id);
   cs.discardPile.push(card);
+  for (const f of extraFuel) { removeCard(cs.hand, f.id); cs.discardPile.push(f); }
   events.push({ type: 'scrap', text: `Scrapped a ${card.colour} ${card.value}.`, data: { cardId: card.id } });
   switch (card.colour) {
     case 'red': dealToEnemy(cs, cmd.targetEnemyId!, 1, events); break;
@@ -241,7 +260,7 @@ export function performMerge(
     : forgeTier3(cards[0] as ForgedCard, cards[1] as ForgedCard, nextId(idGen, 'f'));
   for (const id of cardIds) removeCard(cs.hand, id);
   cs.hand.push(forged);
-  // Task 11 adds plague contagion + plagueAura here.
+  plagueTouch(forged, cards, cs.plagueAura);
   events.push({ type: 'merge', text: `Forged ${forged.defId}.`, data: { defId: forged.defId } });
   fireCombineDamage(cs, events);
   return forged;
@@ -282,14 +301,16 @@ function doActivate(
   const def = elementDef(card.defId);
   const elements = card.colours.map((c) => COLOUR_ELEMENT[c]);
   if (elements.some((e) => cs.lockedElements.includes(e))) throw new Error('illegal: element locked');
-  // fuel — strict colour matching (spec §3.2); Task 11 adds famished surcharge.
+  // fuel — strict colour matching (spec §3.2); famished adds a surcharge that may be any raw colour.
   // Validate fuel and every atom's prerequisites BEFORE paying fuel or mutating anything:
   // rejection must leave state untouched.
-  const cost = def.fuelCost;
+  const cost = def.fuelCost + famishedSurcharge(card);
   if (cmd.fuelIds.length !== cost) throw new Error(`illegal: fuel count ${cmd.fuelIds.length} ≠ ${cost}`);
   if (new Set(cmd.fuelIds).size !== cmd.fuelIds.length) throw new Error('illegal: fuel cards must be distinct');
   const fuel = cmd.fuelIds.map((id) => findCard(cs.hand, id));
-  if (!fuel.every((f) => f.kind === 'raw' && card.colours.includes(f.colour))) {
+  if (!fuel.every((f) => f.kind === 'raw')) throw new Error('illegal: fuel must be raws');
+  const matched = fuel.filter((f) => f.kind === 'raw' && card.colours.includes(f.colour)).length;
+  if (matched < def.fuelCost) {
     throw new Error('illegal: fuel must be raws matching the card colours');
   }
   assertAtomsRunnable(cs, def.onActivate, cmd);
@@ -356,11 +377,14 @@ function runAtoms(
   for (const atom of atoms) {
     switch (atom.op) {
       case 'damage': {
-        dealToEnemy(cs, cmd.targetEnemyId!, atom.amount, events, card.defId === 'smoke' ? 'smoke' : undefined);
+        dealToEnemy(
+          cs, cmd.targetEnemyId!, scarAdjust(card, atom.amount), events,
+          card.defId === 'smoke' ? 'smoke' : undefined,
+        );
         break;
       }
-      case 'draw': drawCards(cs, rng, idGen, atom.amount, events, card); break;
-      case 'block': cs.block += atom.amount; break;
+      case 'draw': drawCards(cs, rng, idGen, scarAdjust(card, atom.amount), events, card); break;
+      case 'block': cs.block += scarAdjust(card, atom.amount); break;
       case 'attach': {
         removeCard(cs.hand, card.id);
         cs.attachedCards.push(card);
