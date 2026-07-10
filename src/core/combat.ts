@@ -8,7 +8,7 @@ import {
   addMark, escalateOnDraw, famishedSurcharge, isScrapBlocked, plagueTouch, scarAdjust,
 } from './marks';
 import type { Rng } from './rng';
-import { COLOUR_ELEMENT } from './types';
+import { COLOUR_ELEMENT, ELEMENT_COLOUR } from './types';
 import type {
   Card, CombatState, Element, Enemy, EnemySpec, ForgedCard, GameEvent,
 } from './types';
@@ -53,6 +53,8 @@ export function startCombat(opts: {
     freeMerges: 0, freeDecombines: 0, scrapSealed: false, lockedElements: [],
     smokeHits: [], plagueAura: false, deathCounter: 0,
     struggles: opts.struggles, relics: opts.relics, recoil: false,
+    emberheartUsed: false, springwellUsed: false, tidalCharmUsed: false,
+    elementActivations: { fire: 0, earth: 0, air: 0, water: 0 },
   };
   const manif = enemies.find((e) => e.rank === 'manifestation');
   if (manif?.suit === 'diamonds') cs.clock = CONFIG.manifestationClock;
@@ -62,7 +64,9 @@ export function startCombat(opts: {
     const forged = cs.drawPile.filter((c) => c.kind === 'forged');
     if (forged.length > 0) addMark(opts.rng.pick(forged), 'plagued', events);
   }
-  drawCards(cs, opts.rng, opts.idGen, cs.handSize, events);
+  // kestrel: round 1 of every fight draws 1 extra on the opening draw only.
+  const openingDraw = cs.handSize + (cs.relics.includes('kestrel') ? 1 : 0);
+  drawCards(cs, opts.rng, opts.idGen, openingDraw, events);
   return cs;
 }
 
@@ -150,8 +154,11 @@ export function endTurn(cs: CombatState, rng: Rng, idGen: IdGen, events: GameEve
   for (const enemy of cs.enemies.filter((e) => e.hp > 0)) {
     // retaliation from attachments — auto-targets the attacker (v1 simplification)
     for (const att of enemy.attachments) {
-      const ret = elementDef(att.defId).retaliate ?? 0;
-      if (ret > 0) dealToEnemy(cs, enemy.id, ret, events);
+      const baseRet = elementDef(att.defId).retaliate ?? 0;
+      if (baseRet > 0) {
+        const ret = baseRet + (cs.relics.includes('roots') ? 1 : 0);
+        dealToEnemy(cs, enemy.id, ret, events);
+      }
     }
     if (enemy.hp <= 0) continue;
     let incoming = enemy.power;
@@ -192,6 +199,7 @@ export function endTurn(cs: CombatState, rng: Rng, idGen: IdGen, events: GameEve
   cs.defenders = [];
   cs.block = 0;
   cs.activatedThisRound = []; cs.activationCounts = {}; cs.smokeHits = [];
+  cs.elementActivations = { fire: 0, earth: 0, air: 0, water: 0 };
   cs.freeMerges = 0; cs.freeDecombines = 0;
   cs.scrapSealed = false; cs.lockedElements = []; cs.recoil = false;
   // Resolve any win/loss from this turn's retaliation before the clock can act:
@@ -330,6 +338,12 @@ export function performMerge(
   cs.hand.push(forged);
   plagueTouch(forged, cards, cs.plagueAura);
   events.push({ type: 'merge', text: `Forged ${forged.defId}.`, data: { defId: forged.defId } });
+  // springwell: first merge each fight heals 1 (no cap — hp can exceed starting hp in v1)
+  if (cs.relics.includes('springwell') && !cs.springwellUsed) {
+    cs.hp += 1;
+    cs.springwellUsed = true;
+    events.push({ type: 'relic', text: 'Springwell mends a wound.', data: { relic: 'springwell' } });
+  }
   fireCombineDamage(cs, events);
   return forged;
 }
@@ -378,13 +392,20 @@ function doActivate(
   // fevered: the first activation each round (activatedThisRound still empty) costs
   // +1 any-colour fuel, additive with the famished surcharge; reset alongside it in endTurn.
   const feveredSurcharge = cs.struggles.includes('fevered') && cs.activatedThisRound.length === 0 ? 1 : 0;
-  const cost = def.fuelCost + famishedSurcharge(card) + feveredSurcharge;
+  // emberheart: the first fire-line activation each fight costs 1 less fuel (min 0). This
+  // discounts the strict-colour requirement itself (requiredFuelCost below), not just the
+  // total — otherwise the matched-colour check further down would still demand the
+  // pre-discount amount of colour-matching fuel even though fewer fuel cards were paid.
+  const emberheartDiscount = cs.relics.includes('emberheart') && !cs.emberheartUsed
+    && card.colours.includes(ELEMENT_COLOUR.fire) ? 1 : 0;
+  const requiredFuelCost = Math.max(0, def.fuelCost - emberheartDiscount);
+  const cost = requiredFuelCost + famishedSurcharge(card) + feveredSurcharge;
   if (cmd.fuelIds.length !== cost) throw new Error(`illegal: fuel count ${cmd.fuelIds.length} ≠ ${cost}`);
   if (new Set(cmd.fuelIds).size !== cmd.fuelIds.length) throw new Error('illegal: fuel cards must be distinct');
   const fuel = cmd.fuelIds.map((id) => findCard(cs.hand, id));
   if (!fuel.every((f) => f.kind === 'raw')) throw new Error('illegal: fuel must be raws');
   const matched = fuel.filter((f) => f.kind === 'raw' && card.colours.includes(f.colour)).length;
-  if (matched < def.fuelCost) {
+  if (matched < requiredFuelCost) {
     throw new Error('illegal: fuel must be raws matching the card colours');
   }
   assertAtomsRunnable(cs, def.onActivate, cmd);
@@ -393,6 +414,11 @@ function doActivate(
   runAtoms(cs, rng, idGen, card, def.onActivate, cmd, events);
   cs.activatedThisRound.push(card.id);
   cs.activationCounts[card.defId] = (cs.activationCounts[card.defId] ?? 0) + 1;
+  if (emberheartDiscount > 0) cs.emberheartUsed = true;
+  // per-round element-line activation counter, used by the kindling/tailwind/bulwark relics
+  for (const el of new Set(elements)) {
+    cs.elementActivations[el] = (cs.elementActivations[el] ?? 0) + 1;
+  }
   onActivated(cs, rng, idGen, card, events);
 }
 
@@ -472,7 +498,7 @@ function runAtoms(
       }
       case 'decombine': {
         const target = findCard(cs.hand, cmd.decombineTargetId!) as ForgedCard;
-        const { returned } = unmerge(target, cmd.burnConstituentId!);
+        const returned = decombineReturned(cs, target, cmd.burnConstituentId!);
         removeCard(cs.hand, target.id);
         cs.hand.push(...returned);
         events.push({ type: 'decombine', text: `${target.defId} comes apart.`, data: { cardId: target.id } });
@@ -495,9 +521,21 @@ function doFreeDecombine(
   const target = findCard(cs.hand, cmd.cardId);
   if (target.kind !== 'forged') throw new Error('illegal: decombine targets forged cards');
   if (!cmd.burnConstituentId) throw new Error('illegal: decombine needs burnConstituentId');
-  const { returned } = unmerge(target, cmd.burnConstituentId);
+  const returned = decombineReturned(cs, target, cmd.burnConstituentId);
   removeCard(cs.hand, target.id);
   cs.hand.push(...returned);
   cs.freeDecombines -= 1;
   events.push({ type: 'decombine', text: `${target.defId} comes apart.`, data: { cardId: target.id } });
+}
+
+// tidal-charm: the first decombine each fight (across both the activate-atom path above and
+// the free-decombine path) burns nothing — all constituents come back instead of just the
+// non-burned ones. burnConstituentId is still required/validated by callers for a consistent
+// command shape even when tidal-charm waives the burn.
+function decombineReturned(cs: CombatState, target: ForgedCard, burnConstituentId: string): Card[] {
+  if (cs.relics.includes('tidal-charm') && !cs.tidalCharmUsed) {
+    cs.tidalCharmUsed = true;
+    return target.constituents;
+  }
+  return unmerge(target, burnConstituentId).returned;
 }

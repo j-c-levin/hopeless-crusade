@@ -55,4 +55,10 @@ export interface CombatState {
   pendingChoice?: PendingChoice;
   pendingPenalty?: { kind: string; targetCardId?: string };
   recoil: boolean;                            // war-stronghold: player takes 1 whenever dealing enemy damage this round
+  // relics: once-per-fight flags (not reset per round)
+  emberheartUsed: boolean; springwellUsed: boolean; tidalCharmUsed: boolean;
+  // per-round element activation counter (defId -> colours -> element), reset each round in endTurn;
+  // drives the "Nth element-line activation this round" relics (kindling/tailwind/bulwark) — kept as
+  // its own counter rather than derived from activationCounts (keyed by defId) + colour lookups.
+  elementActivations: Record<Element, number>;
 }
