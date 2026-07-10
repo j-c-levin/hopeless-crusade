@@ -53,4 +53,6 @@ export interface CombatState {
   deathCounter: number;
   struggles: string[]; relics: string[];
   pendingChoice?: PendingChoice;
+  pendingPenalty?: { kind: string; targetCardId?: string };
+  recoil: boolean;                            // war-stronghold: player takes 1 whenever dealing enemy damage this round
 }

@@ -1,6 +1,7 @@
 import { CONFIG } from '../content/config';
 import { elementDef, type Atom } from '../content/elements';
 import { findCard, nextId, removeCard, type IdGen } from './cards';
+import { onCorruptionDrawn, resolveChoice } from './corruption';
 import { forgeTier2, forgeTier3, tier2Target, tier3DefId, unmerge } from './forge';
 import { onActivated, onEndOfRound, getDeflection } from './followups';
 import {
@@ -41,7 +42,7 @@ export function startCombat(opts: {
     activatedThisRound: [], activationCounts: {}, charges: {},
     freeMerges: 0, freeDecombines: 0, scrapSealed: false, lockedElements: [],
     smokeHits: [], plagueAura: false, deathCounter: 0,
-    struggles: opts.struggles, relics: opts.relics,
+    struggles: opts.struggles, relics: opts.relics, recoil: false,
   };
   const manif = enemies.find((e) => e.rank === 'manifestation');
   if (manif?.suit === 'diamonds') cs.clock = CONFIG.manifestationClock;
@@ -69,8 +70,7 @@ export function drawCards(
     }
     const card = cs.drawPile.pop()!;
     if (card.kind === 'corruption') {
-      // Task 12 replaces this stub with onCorruptionDrawn.
-      events.push({ type: 'corruption-drawn', text: 'A corruption card surfaces.' });
+      onCorruptionDrawn(cs, rng, idGen, card, events);
       cs.discardPile.push(card);
     } else if (card.marks.plagued !== undefined || card.marks.doomed !== undefined) {
       escalateOnDraw(cs, card, events);
@@ -102,12 +102,27 @@ export function dealToEnemy(
   if (tag === 'smoke' && !cs.smokeHits.includes(enemy.id)) cs.smokeHits.push(enemy.id);
   events.push({ type: 'enemy-damaged', text: `${enemy.rank} takes ${amount}.`, data: { enemyId, amount } });
   if (enemy.hp <= 0) events.push({ type: 'enemy-down', text: `The ${enemy.rank} falls.`, data: { enemyId } });
+  if (cs.recoil) {
+    cs.hp -= 1;
+    events.push({ type: 'recoil', text: 'The war corruption bites back.' });
+    checkOutcome(cs);
+  }
   checkOutcome(cs);
 }
 
 export function endTurn(cs: CombatState, rng: Rng, idGen: IdGen, events: GameEvent[]): void {
   if (cs.outcome !== 'ongoing') return;
   onEndOfRound(cs, rng, idGen, events);
+  // War echo: a clubs-manifestation fight revives each first-death enemy once, at half maxHp.
+  if (cs.enemies.some((e) => e.suit === 'clubs' && e.rank === 'manifestation' && e.hp > 0)) {
+    for (const enemy of cs.enemies) {
+      if (enemy.hp <= 0 && !enemy.echoed) {
+        enemy.hp = Math.ceil(enemy.maxHp / 2);
+        enemy.echoed = true;
+        events.push({ type: 'war-echo', text: 'The fallen rises again.', data: { enemyId: enemy.id } });
+      }
+    }
+  }
   let deflect = getDeflection(cs);
   for (const enemy of cs.enemies.filter((e) => e.hp > 0)) {
     // retaliation from attachments — auto-targets the attacker (v1 simplification)
@@ -148,7 +163,7 @@ export function endTurn(cs: CombatState, rng: Rng, idGen: IdGen, events: GameEve
   cs.block = 0;
   cs.activatedThisRound = []; cs.activationCounts = {}; cs.smokeHits = [];
   cs.freeMerges = 0; cs.freeDecombines = 0;
-  cs.scrapSealed = false; cs.lockedElements = [];
+  cs.scrapSealed = false; cs.lockedElements = []; cs.recoil = false;
   // Resolve any win/loss from this turn's retaliation before the clock can act:
   // all enemies dead = won, and a clock hitting 0 must not overwrite that.
   checkOutcome(cs);
@@ -182,7 +197,7 @@ export function combatCommand(
     case 'endTurn': endTurn(cs, rng, idGen, events); break;
     case 'activate': doActivate(cs, rng, idGen, cmd, events); break;       // Task 9
     case 'decombine': doFreeDecombine(cs, cmd, events); break;             // Task 10
-    case 'resolveChoice': throw new Error('illegal: no choice pending');   // Task 12 replaces
+    case 'resolveChoice': resolveChoice(cs, rng, idGen, cmd.optionId, events); break;
   }
   return events;
 }
