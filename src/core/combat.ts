@@ -1,17 +1,25 @@
 import { CONFIG } from '../content/config';
 import { elementDef, type Atom } from '../content/elements';
-import { findCard, nextId, removeCard, type IdGen } from './cards';
+import { findCard, isRaw, nextId, removeCard, type IdGen } from './cards';
 import { onCorruptionDrawn, resolveChoice } from './corruption';
 import { forgeTier2, forgeTier3, tier2Target, tier3DefId, unmerge } from './forge';
 import { onActivated, onEndOfRound, getDeflection } from './followups';
 import {
-  escalateOnDraw, famishedSurcharge, isScrapBlocked, plagueTouch, scarAdjust,
+  addMark, escalateOnDraw, famishedSurcharge, isScrapBlocked, plagueTouch, scarAdjust,
 } from './marks';
 import type { Rng } from './rng';
 import { COLOUR_ELEMENT } from './types';
 import type {
-  Card, CombatState, Enemy, EnemySpec, ForgedCard, GameEvent,
+  Card, CombatState, Element, Enemy, EnemySpec, ForgedCard, GameEvent,
 } from './types';
+
+const ELEMENTS: Element[] = ['fire', 'earth', 'air', 'water'];
+
+// Block gains route through here so cold-grip (halve, round down) applies uniformly
+// to the yellow scrap, block atoms (including followups), and the forest followup.
+export function gainBlock(cs: CombatState, n: number): void {
+  cs.block += cs.struggles.includes('cold-grip') ? Math.floor(n / 2) : n;
+}
 
 export type CombatCommand =
   | { type: 'scrap'; cardId: string; targetEnemyId?: string; mergeCardIds?: string[];
@@ -29,14 +37,16 @@ export function startCombat(opts: {
   enemies: EnemySpec[]; struggles: string[]; relics: string[];
   rng: Rng; idGen: IdGen;
 }): CombatState {
+  const siege = opts.struggles.includes('siege') ? 1 : 0;
   const enemies: Enemy[] = opts.enemies.map((e) => ({
     id: nextId(opts.idGen, 'e'), suit: e.suit, rank: e.rank,
     hp: e.hp, maxHp: e.hp,
-    power: e.rank === 'manifestation' ? manifestationPower(e.suit) : CONFIG.enemyPower[e.rank]!,
+    power: (e.rank === 'manifestation' ? manifestationPower(e.suit) : CONFIG.enemyPower[e.rank]!) + siege,
     attachments: [], echoed: false,
   }));
   const cs: CombatState = {
-    outcome: 'ongoing', round: 1, hp: opts.hp, handSize: opts.handSize, block: 0,
+    outcome: 'ongoing', round: 1, hp: opts.hp,
+    handSize: opts.handSize - (opts.struggles.includes('rationing') ? 1 : 0), block: 0,
     hand: [], drawPile: opts.rng.shuffle(opts.deck), discardPile: [],
     attachedCards: [], defenders: [], enemies,
     activatedThisRound: [], activationCounts: {}, charges: {},
@@ -48,6 +58,10 @@ export function startCombat(opts: {
   if (manif?.suit === 'diamonds') cs.clock = CONFIG.manifestationClock;
   if (manif?.suit === 'hearts') cs.plagueAura = true;
   const events: GameEvent[] = [];
+  if (cs.struggles.includes('contagion')) {
+    const forged = cs.drawPile.filter((c) => c.kind === 'forged');
+    if (forged.length > 0) addMark(opts.rng.pick(forged), 'plagued', events);
+  }
   drawCards(cs, opts.rng, opts.idGen, cs.handSize, events);
   return cs;
 }
@@ -67,6 +81,10 @@ export function drawCards(
       cs.drawPile = rng.shuffle(cs.discardPile);
       cs.discardPile = [];
       events.push({ type: 'reshuffle', text: 'The deck turns over.' });
+      if (cs.struggles.includes('toll') && cs.drawPile.length > 0) {
+        const exiled = cs.drawPile.pop()!;
+        events.push({ type: 'exile', text: 'The toll takes a card from the top.', data: { cardId: exiled.id } });
+      }
     }
     const card = cs.drawPile.pop()!;
     if (card.kind === 'corruption') {
@@ -101,7 +119,13 @@ export function dealToEnemy(
   enemy.hp -= amount;
   if (tag === 'smoke' && !cs.smokeHits.includes(enemy.id)) cs.smokeHits.push(enemy.id);
   events.push({ type: 'enemy-damaged', text: `${enemy.rank} takes ${amount}.`, data: { enemyId, amount } });
-  if (enemy.hp <= 0) events.push({ type: 'enemy-down', text: `The ${enemy.rank} falls.`, data: { enemyId } });
+  if (enemy.hp <= 0) {
+    events.push({ type: 'enemy-down', text: `The ${enemy.rank} falls.`, data: { enemyId } });
+    if (cs.struggles.includes('crossfire')) {
+      cs.hp -= 1;
+      events.push({ type: 'crossfire', text: 'Crossfire draws blood as the enemy falls.' });
+    }
+  }
   if (cs.recoil) {
     cs.hp -= 1;
     events.push({ type: 'recoil', text: 'The war corruption bites back.' });
@@ -146,6 +170,13 @@ export function endTurn(cs: CombatState, rng: Rng, idGen: IdGen, events: GameEve
       events.push({ type: 'player-damaged', text: `You take ${incoming}.`, data: { amount: incoming } });
     }
   }
+  // attrition: after attacks land, before the per-round resets below
+  if (cs.struggles.includes('attrition') && cs.hand.length > 0) {
+    const discarded = rng.pick(cs.hand);
+    removeCard(cs.hand, discarded.id);
+    cs.discardPile.push(discarded);
+    events.push({ type: 'attrition', text: 'Attrition claims a card from your hand.', data: { cardId: discarded.id } });
+  }
   // board does not persist between rounds (spec §3.2)
   for (const enemy of cs.enemies) {
     for (const att of enemy.attachments) {
@@ -174,6 +205,29 @@ export function endTurn(cs: CombatState, rng: Rng, idGen: IdGen, events: GameEve
   cs.round += 1;
   checkOutcome(cs);
   if (cs.outcome !== 'ongoing') return;
+  // Start-of-round struggles. Applied here (endTurn only) rather than duplicated into
+  // startCombat for round 1 — simpler, and it means round 1 is exempt from all three.
+  if (cs.struggles.includes('tithe')) {
+    const raws = cs.hand.filter(isRaw);
+    if (raws.length > 0) {
+      const cheapest = raws.reduce((a, b) => (b.value < a.value ? b : a));
+      removeCard(cs.hand, cheapest.id);
+      cs.discardPile.push(cheapest);
+      events.push({ type: 'tithe', text: 'The tithe takes your cheapest raw.', data: { cardId: cheapest.id } });
+    } else {
+      cs.hp -= 1;
+      events.push({ type: 'tithe', text: 'With no raw to give, the tithe takes 1 hp instead.' });
+      checkOutcome(cs);
+      if (cs.outcome !== 'ongoing') return;
+    }
+  }
+  if (cs.struggles.includes('quarantine')) {
+    cs.lockedElements = [rng.pick(ELEMENTS)];
+    events.push({ type: 'quarantine', text: 'An element is quarantined this round.' });
+  }
+  if (cs.struggles.includes('creeping-end') && cs.round % 3 === 0 && cs.hand.length > 0) {
+    addMark(rng.pick(cs.hand), 'doomed', events);
+  }
   drawCards(cs, rng, idGen, Math.max(0, cs.handSize - cs.hand.length), events);
 }
 
@@ -244,7 +298,7 @@ function doScrap(
   events.push({ type: 'scrap', text: `Scrapped a ${card.colour} ${card.value}.`, data: { cardId: card.id } });
   switch (card.colour) {
     case 'red': dealToEnemy(cs, cmd.targetEnemyId!, 1, events); break;
-    case 'yellow': cs.block += 1; break;
+    case 'yellow': gainBlock(cs, 1); break;
     case 'blue': drawCards(cs, rng, idGen, 1, events); break;
     case 'green': performMerge(cs, idGen, cmd.mergeCardIds!, events); break;
   }
@@ -295,6 +349,9 @@ function fireCombineDamage(cs: CombatState, events: GameEvent[]): void {
 function doHailMary(
   cs: CombatState, cmd: Extract<CombatCommand, { type: 'hailMary' }>, events: GameEvent[],
 ): void {
+  if (cs.struggles.includes('empty-stores')) {
+    throw new Error('illegal: hail mary is disabled (empty stores)');
+  }
   if (cmd.cardIds.length !== CONFIG.hailMaryBurn) throw new Error('illegal: hail mary burns exactly 3');
   if (new Set(cmd.cardIds).size !== cmd.cardIds.length) throw new Error('illegal: hail mary needs distinct raws');
   const cards = cmd.cardIds.map((id) => findCard(cs.hand, id));
@@ -318,7 +375,10 @@ function doActivate(
   // fuel — strict colour matching (spec §3.2); famished adds a surcharge that may be any raw colour.
   // Validate fuel and every atom's prerequisites BEFORE paying fuel or mutating anything:
   // rejection must leave state untouched.
-  const cost = def.fuelCost + famishedSurcharge(card);
+  // fevered: the first activation each round (activatedThisRound still empty) costs
+  // +1 any-colour fuel, additive with the famished surcharge; reset alongside it in endTurn.
+  const feveredSurcharge = cs.struggles.includes('fevered') && cs.activatedThisRound.length === 0 ? 1 : 0;
+  const cost = def.fuelCost + famishedSurcharge(card) + feveredSurcharge;
   if (cmd.fuelIds.length !== cost) throw new Error(`illegal: fuel count ${cmd.fuelIds.length} ≠ ${cost}`);
   if (new Set(cmd.fuelIds).size !== cmd.fuelIds.length) throw new Error('illegal: fuel cards must be distinct');
   const fuel = cmd.fuelIds.map((id) => findCard(cs.hand, id));
@@ -398,7 +458,7 @@ function runAtoms(
         break;
       }
       case 'draw': drawCards(cs, rng, idGen, scarAdjust(card, atom.amount), events, card); break;
-      case 'block': cs.block += scarAdjust(card, atom.amount); break;
+      case 'block': gainBlock(cs, scarAdjust(card, atom.amount)); break;
       case 'attach': {
         removeCard(cs.hand, card.id);
         cs.attachedCards.push(card);

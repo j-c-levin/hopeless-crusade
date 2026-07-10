@@ -1,6 +1,6 @@
 import { CONFIG } from '../content/config';
 import { ELEMENTS, elementDef } from '../content/elements';
-import { dealToEnemy, drawCards, lowestHpEnemy } from './combat';
+import { dealToEnemy, drawCards, gainBlock, lowestHpEnemy } from './combat';
 import { PAIR_DEF } from './forge';
 import type { IdGen } from './cards';
 import type { Rng } from './rng';
@@ -29,7 +29,7 @@ export function onActivated(
           const t = lowestHpEnemy(cs);
           if (t) dealToEnemy(cs, t.id, atom.amount, events);
         } else if (atom.op === 'draw') drawCards(cs, rng, idGen, atom.amount, events, card);
-        else if (atom.op === 'block') cs.block += atom.amount;
+        else if (atom.op === 'block') gainBlock(cs, atom.amount);
       }
       events.push({ type: 'followup', text: `${def.name} follows up.`, data: { defId: def.id } });
     }
@@ -102,5 +102,5 @@ export function onEndOfRound(cs: CombatState, rng: Rng, idGen: IdGen, events: Ga
   }
   // forest
   const trees = cs.defenders.filter((d) => d.defId === 'tree').length;
-  if (trees >= 3) cs.block += trees;
+  if (trees >= 3) gainBlock(cs, trees);
 }
