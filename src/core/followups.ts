@@ -33,7 +33,7 @@ export function onActivated(
         if (atom.op === 'damage') {
           const t = lowestHpEnemy(cs);
           if (t) dealToEnemy(cs, t.id, atom.amount, events);
-        } else if (atom.op === 'draw') drawCards(cs, rng, idGen, atom.amount, events, card);
+        } else if (atom.op === 'draw') drawCards(cs, rng, idGen, atom.amount, events, card.defId);
         else if (atom.op === 'block') gainBlock(cs, atom.amount);
       }
       events.push({ type: 'followup', text: `${def.name} follows up.`, data: { defId: def.id } });
@@ -41,7 +41,7 @@ export function onActivated(
   } else {
     switch (f.special) {
       case 'storm':
-        if (count === 2) drawCards(cs, rng, idGen, 2, events, card);
+        if (count === 2) drawCards(cs, rng, idGen, 2, events, card.defId);
         break;
       case 'ash':
         if (count >= 2) for (const id of cs.smokeHits) dealToEnemy(cs, id, 1, events);
@@ -75,7 +75,7 @@ function applyRelicActivationHooks(
     }
   }
   if (cs.relics.includes('tailwind') && elements.has('air') && cs.elementActivations.air === 2) {
-    drawCards(cs, rng, idGen, 1, events, card);
+    drawCards(cs, rng, idGen, 1, events, card.defId);
     events.push({ type: 'relic', text: 'Tailwind lifts a card free.', data: { relic: 'tailwind' } });
   }
   if (cs.relics.includes('bulwark') && elements.has('earth') && cs.elementActivations.earth === 2) {
@@ -94,7 +94,7 @@ function maybeFlood(cs: CombatState, rng: Rng, idGen: IdGen, events: GameEvent[]
   }
   if (wet === 3) {
     events.push({ type: 'followup', text: 'The flood breaks.', data: { defId: 'rain' } });
-    drawCards(cs, rng, idGen, 2, events, rain);
+    drawCards(cs, rng, idGen, 2, events, rain.defId);
     const t = lowestHpEnemy(cs);
     if (t) dealToEnemy(cs, t.id, 2, events);
   }

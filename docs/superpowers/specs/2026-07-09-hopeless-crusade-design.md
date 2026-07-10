@@ -416,3 +416,23 @@ hail mary = burn 3 raws → 1 damage · enemy power 2/4/6 · corruption injectio
 starting corruption 1 card · reward points 1/2/3/5 per
 tower/stronghold/fortress/manifestation defeated · relic cost 4 points ·
 reduced-struggles cost 6 points.
+
+## Design rulings (post-implementation)
+
+Decisions made or confirmed during implementation review, recorded here so
+future changes don't accidentally relitigate them:
+
+1. **Self-damage vs. the killing blow.** When self-inflicted damage from your
+   own killing blow (crossfire's 1 hp on enemy-down, war-stronghold's recoil)
+   drops the player to 0 hp in the same moment the last enemy falls, the death
+   takes precedence over the win. This is intentional and on-theme — the
+   crusade is called Hopeless for a reason — not a bug to be resolved in the
+   player's favour.
+2. **Landslide's deflection.** Deflects 1 damage per attached card of *any*
+   element on an enemy, but the effect is gated on 2 or more `land` cards
+   being attached — below that threshold it deflects nothing, even if other
+   elements are attached.
+3. **Map bag underflow.** Drawing nodes for a zone degrades gracefully when
+   that zone's own bag runs dry: it widens to adjacent pools (same living
+   suits) in stages, and as a last resort pulls "echoes of fallen domains"
+   from the full deck. Nodes are never left empty because of a starved bag.

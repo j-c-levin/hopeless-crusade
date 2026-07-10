@@ -54,6 +54,7 @@ export function startCombat(opts: {
     freeMerges: 0, freeDecombines: 0, scrapSealed: false, lockedElements: [],
     smokeHits: [], plagueAura: false, deathCounter: 0,
     struggles: opts.struggles, relics: opts.relics, recoil: false,
+    pendingDraws: 0,
     emberheartUsed: false, springwellUsed: false, tidalCharmUsed: false,
     elementActivations: { fire: 0, earth: 0, air: 0, water: 0 },
   };
@@ -83,11 +84,22 @@ function manifestationPower(_suit: string): number {
   return 10;
 }
 
+// sourceDefId identifies the forged card whose effect is drawing these cards (only used for
+// onDrawDamage, e.g. air-7..9/wind/monsoon); omit for draws with no such source (opening hand,
+// end-of-round refill, blue scrap).
 export function drawCards(
   cs: CombatState, rng: Rng, idGen: IdGen, n: number,
-  events: GameEvent[], source?: ForgedCard,
+  events: GameEvent[], sourceDefId?: string,
 ): void {
   for (let i = 0; i < n; i++) {
+    // A corruption card drawn earlier in THIS batch may have set a pendingChoice (e.g. two
+    // diamonds-tower cards stacked back to back). Stop here and queue the remainder rather
+    // than overwriting/dropping that choice — resolveChoice resumes the batch once answered.
+    if (cs.pendingChoice) {
+      cs.pendingDraws += (n - i);
+      cs.pendingDrawDefId = sourceDefId;
+      return;
+    }
     if (cs.drawPile.length === 0) {
       if (cs.discardPile.length === 0) return; // nothing left to draw — not a loss (hp is life)
       cs.drawPile = rng.shuffle(cs.discardPile);
@@ -107,8 +119,8 @@ export function drawCards(
     } else {
       cs.hand.push(card);
     }
-    if (source?.kind === 'forged') {
-      const dmg = elementDef(source.defId).onDrawDamage ?? 0;
+    if (sourceDefId) {
+      const dmg = elementDef(sourceDefId).onDrawDamage ?? 0;
       if (dmg > 0) {
         const target = lowestHpEnemy(cs);
         if (target) dealToEnemy(cs, target.id, dmg, events);
@@ -491,7 +503,7 @@ function runAtoms(
         );
         break;
       }
-      case 'draw': drawCards(cs, rng, idGen, scarAdjust(card, atom.amount), events, card); break;
+      case 'draw': drawCards(cs, rng, idGen, scarAdjust(card, atom.amount), events, card.defId); break;
       case 'block': gainBlock(cs, scarAdjust(card, atom.amount)); break;
       case 'attach': {
         removeCard(cs.hand, card.id);

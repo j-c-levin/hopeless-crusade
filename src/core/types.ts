@@ -54,6 +54,12 @@ export interface CombatState {
   struggles: string[]; relics: string[];
   pendingChoice?: PendingChoice;
   pendingPenalty?: { kind: string; targetCardId?: string };
+  // Draws deferred because a corruption card drawn mid-batch set a pendingChoice: the
+  // remaining count of a drawCards() call that stopped early, resumed by resolveChoice
+  // once the choice is answered. pendingDrawDefId carries the original draw's source
+  // defId through the pause (for onDrawDamage cards like air-7..9/wind/monsoon).
+  pendingDraws: number;
+  pendingDrawDefId?: string;
   recoil: boolean;                            // war-stronghold: player takes 1 whenever dealing enemy damage this round
   // relics: once-per-fight flags (not reset per round)
   emberheartUsed: boolean; springwellUsed: boolean; tidalCharmUsed: boolean;

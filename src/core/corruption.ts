@@ -1,4 +1,4 @@
-import { checkOutcome } from './combat';
+import { checkOutcome, drawCards } from './combat';
 import { nextId, removeCard, type IdGen } from './cards';
 import { addMark } from './marks';
 import type { Rng } from './rng';
@@ -85,7 +85,6 @@ export function onCorruptionDrawn(
 export function resolveChoice(
   cs: CombatState, rng: Rng, idGen: IdGen, optionId: string, events: GameEvent[],
 ): void {
-  void idGen; // no new cards are minted by any resolution below
   if (!cs.pendingChoice || !cs.pendingPenalty) throw new Error('illegal: no choice pending');
   if (!cs.pendingChoice.options.some((o) => o.id === optionId)) {
     throw new Error(`illegal: unknown option ${optionId}`);
@@ -96,9 +95,21 @@ export function resolveChoice(
   cs.pendingPenalty = undefined;
   if (optionId === 'pay') {
     for (const c of cheapestRaws(cs, payCost(kind))) removeFromHandToDiscard(cs, c, events);
-    return;
+  } else {
+    applyPenalty(cs, rng, kind, optionId, penalty, events);
   }
-  applyPenalty(cs, rng, kind, optionId, penalty, events);
+  // The corruption card that offered this choice may have been drawn mid-batch (opening
+  // hand, air draw-2, storm...), leaving later draws of that batch queued rather than
+  // dropped. Resume them now that the choice is settled. This may draw another
+  // choice-corruption and defer again — that recursion is correct and terminates because
+  // each resumption strictly shrinks pendingDraws.
+  if (cs.pendingDraws > 0 && !cs.pendingChoice) {
+    const remaining = cs.pendingDraws;
+    cs.pendingDraws = 0;
+    const sourceDefId = cs.pendingDrawDefId;
+    cs.pendingDrawDefId = undefined;
+    drawCards(cs, rng, idGen, remaining, events, sourceDefId);
+  }
 }
 
 // ---- pay-or-suffer machinery ------------------------------------------
@@ -205,6 +216,10 @@ function applyPenalty(
         if (t) {
           removeCard(cs.hand, t.id); // exiled — removed from the game, not discarded
           events.push({ type: 'exile', text: 'A forging is exiled.', data: { cardId: t.id } });
+        } else {
+          events.push({
+            type: 'exile-nothing', text: 'Death reaches for a forging, and finds none.',
+          });
         }
       } else {
         cs.hp -= 4;
