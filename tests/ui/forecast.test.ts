@@ -69,9 +69,10 @@ describe('forecast (pure)', () => {
     const deck: Card[] = makeStartingDeck(idGen);
     const redRaws = deck.filter((c) => c.kind === 'raw' && c.colour === 'red') as RawCard[];
     // Consuming every red raw should break every fire-* tier-2 and every fire-touching tier-3.
+    // Warnings use the friendly display labels ("Fire 7", "Volcano"), not raw defId slugs.
     const f = forecast(deck, redRaws.map((c) => c.id));
-    expect(f.warnings.some((w) => w.includes('fire-7'))).toBe(true);
-    expect(f.warnings.some((w) => w.includes('volcano'))).toBe(true);
+    expect(f.warnings.some((w) => w.includes('Fire 7'))).toBe(true);
+    expect(f.warnings.some((w) => w.includes('Volcano'))).toBe(true);
   });
 
   it('computes fuel counts correctly on a hand-built deck', () => {
@@ -109,5 +110,16 @@ describe('forecast (pure)', () => {
     ];
     const f = forecast(deck);
     expect(reachableMap(f.tier3)['wind']).toBe(false);
+  });
+
+  it('wind from raws alone needs TWO disjoint blue subsets: one blue 7 is not enough, two are', () => {
+    // Zero forged tier-2s: capacity comes entirely from the disjoint-subset-sum DP over raws.
+    // A single blue 7 can forge one air tier-2, but wind needs two airs — unreachable.
+    const oneBlue: Card[] = [raw('b1', 'blue', 7)];
+    expect(reachableMap(forecast(oneBlue).tier3)['wind']).toBe(false);
+
+    // A second blue 7 makes two disjoint subsets, each summing to a valid total — reachable.
+    const twoBlue: Card[] = [raw('b1', 'blue', 7), raw('b2', 'blue', 7)];
+    expect(reachableMap(forecast(twoBlue).tier3)['wind']).toBe(true);
   });
 });

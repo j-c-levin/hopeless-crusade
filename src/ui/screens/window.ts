@@ -105,9 +105,10 @@ export function renderWindow(run: RunState, dispatch: Dispatch, rerender: () => 
     && tier3DefId(selectedForgedCards[0]!, selectedForgedCards[1]!) !== null;
 
   // The forecast panel is always visible here and lives over the current merge-in-progress
-  // selection (raw slots picked for a tier-2 merge, or forged tray cards picked for a tier-3
-  // merge) so the player sees the option space narrow *before* confirming, not after.
-  const proposedMergeIds = selectedRaws.length > 0 ? selectedRaws : selectedForged;
+  // selection (raw slots picked for a tier-2 merge, and/or forged tray cards picked for a
+  // tier-3 merge — the two selections are independent and can coexist) so the player sees the
+  // option space narrow *before* confirming, not after.
+  const proposedMergeIds = [...selectedRaws, ...selectedForged];
   const panel = renderForecastPanel(forecast(run.deck, proposedMergeIds.length > 0 ? proposedMergeIds : undefined));
 
   const root = document.createElement('div');

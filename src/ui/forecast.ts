@@ -157,15 +157,18 @@ export function forecast(deck: Card[], proposedMergeIds?: string[]): Forecast {
   const afterDeck = deck.filter((c) => !consumed.has(c.id));
   const after = computeForecast(afterDeck);
 
+  // Warnings use the friendly display label ("Fire 7", "Volcano") rather than raw defId slugs,
+  // matching the chips in the panel above them. forecastEntryLabel is declared below (function
+  // declarations hoist).
   const warnings: string[] = [];
   for (let i = 0; i < before.tier2.length; i++) {
     if (before.tier2[i]!.reachable && !after.tier2[i]!.reachable) {
-      warnings.push(`${after.tier2[i]!.defId} would no longer be forgeable.`);
+      warnings.push(`${forecastEntryLabel(after.tier2[i]!.defId)} would no longer be forgeable.`);
     }
   }
   for (let i = 0; i < before.tier3.length; i++) {
     if (before.tier3[i]!.reachable && !after.tier3[i]!.reachable) {
-      warnings.push(`${after.tier3[i]!.defId} would no longer be forgeable.`);
+      warnings.push(`${forecastEntryLabel(after.tier3[i]!.defId)} would no longer be forgeable.`);
     }
   }
   for (let i = 0; i < before.fuel.length; i++) {
