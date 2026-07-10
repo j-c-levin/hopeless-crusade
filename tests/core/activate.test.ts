@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { Rng } from '../../src/core/rng';
 import { makeStartingDeck } from '../../src/core/cards';
 import { startCombat, combatCommand } from '../../src/core/combat';
-import { forgeTier2 } from '../../src/core/forge';
+import { forgeTier2, forgeTier3 } from '../../src/core/forge';
 import type { CombatState, RawCard } from '../../src/core/types';
 
 const raw = (id: string, colour: RawCard['colour'], value: number): RawCard => ({
@@ -60,6 +60,23 @@ describe('activation', () => {
     cs.hand.push(raw('b2', 'blue', 1));
     expect(() => combatCommand(cs, new Rng(2), { n: 2000 },
       { type: 'activate', cardId: 'air', fuelIds: ['b2'] })).toThrow(/locked/);
+  });
+
+  it('rejects discardIds that overlap fuelIds, without consuming fuel', () => {
+    const cs = setup();
+    // smoke = air (blue) + fire (red) tier-3; onActivate: draw 1, discard 1, damage 1; fuelCost 2
+    const smoke = forgeTier3(
+      forgeTier2([raw('sa', 'blue', 3), raw('sb', 'blue', 4)], 's-air'),
+      forgeTier2([raw('sc', 'red', 3), raw('sd', 'red', 4)], 's-fire'),
+      'smk');
+    cs.hand = [smoke, raw('r1', 'red', 2), raw('r2', 'red', 3)];
+    const handBefore = cs.hand.map((c) => c.id);
+    expect(() => combatCommand(cs, new Rng(2), { n: 2000 }, {
+      type: 'activate', cardId: 'smk', fuelIds: ['r1', 'r2'],
+      discardIds: ['r1'], targetEnemyId: cs.enemies[0]!.id,
+    })).toThrow(/overlap|fuel/);
+    expect(cs.hand.map((c) => c.id)).toEqual(handBefore); // fuel not consumed
+    expect(cs.enemies[0]!.hp).toBe(10); // no atoms ran
   });
 
   it('water-9 freeMerge grants a green-less merge', () => {

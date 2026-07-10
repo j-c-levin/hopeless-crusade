@@ -332,6 +332,11 @@ function assertAtomsRunnable(
             || !ids.every((id) => cs.hand.some((c) => c.id === id))) {
           throw new Error('illegal: discard needs exactly the right discardIds present in hand');
         }
+        // fuel is paid (removed from hand) between this check and the atom running,
+        // so a discardId naming a fuel card would pass here yet be gone at execution
+        if (ids.some((id) => cmd.fuelIds.includes(id))) {
+          throw new Error('illegal: discardIds cannot overlap fuelIds');
+        }
         break;
       }
       default: break;
