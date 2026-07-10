@@ -3,6 +3,7 @@ import { elementDef } from '../../content/elements';
 import { tier2Target, tier3DefId } from '../../core/forge';
 import type { RunState } from '../../core/run';
 import type { Card, ForgedCard } from '../../core/types';
+import { forecast, renderForecastPanel } from '../forecast';
 import type { Store } from '../store';
 
 type Dispatch = Store['dispatch'];
@@ -103,10 +104,17 @@ export function renderWindow(run: RunState, dispatch: Dispatch, rerender: () => 
   const tier3Ready = selectedForgedCards.length === 2
     && tier3DefId(selectedForgedCards[0]!, selectedForgedCards[1]!) !== null;
 
+  // The forecast panel is always visible here and lives over the current merge-in-progress
+  // selection (raw slots picked for a tier-2 merge, or forged tray cards picked for a tier-3
+  // merge) so the player sees the option space narrow *before* confirming, not after.
+  const proposedMergeIds = selectedRaws.length > 0 ? selectedRaws : selectedForged;
+  const panel = renderForecastPanel(forecast(run.deck, proposedMergeIds.length > 0 ? proposedMergeIds : undefined));
+
   const root = document.createElement('div');
   root.className = 'window-screen';
   root.innerHTML = `
     <h2>Forge Window</h2>
+    ${panel}
     <div class="window-slots" data-testid="window-slots">
       ${win.slotIds.map((id) => renderSlot(run.deck.find((c) => c.id === id), id)).join('')}
     </div>

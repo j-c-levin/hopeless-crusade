@@ -4,14 +4,18 @@ import type { RunCommand, RunState } from '../../core/run';
 import type {
   Card, CombatState, CorruptionCard, Enemy, ForgedCard, RawCard,
 } from '../../core/types';
+import { forecast, renderForecastPanel } from '../forecast';
 
 type Dispatch = (cmd: RunCommand) => void;
 
 const SUIT_GLYPH: Record<string, string> = {
   diamonds: '♦', hearts: '♥', clubs: '♣', spades: '♠',
 };
-const MARK_LABEL: Record<string, string> = {
-  famished: 'FAM', plagued: 'PLG', scarred: 'SCR', doomed: 'DMD',
+// Text glyphs standing in for the four mark stickers (spec's withered/pustule/crack/skull) —
+// pure CSS/text, no images: ♦ withered (famished), ♥ pustule (plagued), ♣ crack (scarred),
+// ♠ skull (doomed).
+const MARK_GLYPH: Record<string, string> = {
+  famished: '♦', plagued: '♥', scarred: '♣', doomed: '♠',
 };
 
 // Which enemy is the current target for red scrap / activate-attach / hail mary. UI-only —
@@ -47,7 +51,7 @@ function cardLabel(c: Card): string {
 function markBadges(card: Card): string {
   return Object.entries(card.marks)
     .filter(([, n]) => (n ?? 0) > 0)
-    .map(([mark]) => `<span class="mark-badge mark-${mark}">${MARK_LABEL[mark] ?? mark}</span>`)
+    .map(([mark]) => `<span class="mark-badge mark-${mark}" title="${mark}">${MARK_GLYPH[mark] ?? mark}</span>`)
     .join('');
 }
 
@@ -376,6 +380,22 @@ function handleClick(
   }
 }
 
+// The combat forecast is computed over drawPile + discardPile + hand — the fight's full working
+// deck. Deliberately EXCLUDES attachedCards: a card attached to an enemy is out of play for this
+// fight (it can't be used as fuel or merged again until the fight ends), so counting it toward
+// "what could I still forge/fuel" would overstate the player's real option space mid-fight.
+function combatForecastDeck(combat: CombatState): Card[] {
+  return [...combat.drawPile, ...combat.discardPile, ...combat.hand];
+}
+
+function renderCombatForecast(combat: CombatState): string {
+  return `
+    <details class="forecast-details" data-testid="forecast-details">
+      <summary>Forecast</summary>
+      ${renderForecastPanel(forecast(combatForecastDeck(combat)))}
+    </details>`;
+}
+
 export function renderCombat(run: RunState, dispatch: Dispatch, rerender: () => void): HTMLElement {
   const combat = run.combat!;
 
@@ -388,7 +408,7 @@ export function renderCombat(run: RunState, dispatch: Dispatch, rerender: () => 
   }
 
   const root = document.createElement('div');
-  root.className = 'combat-screen';
+  root.className = `combat-screen domain-${run.map.current.domain}`;
   root.innerHTML = `
     ${combat.pendingChoice ? renderChoiceModal(combat) : ''}
     ${renderStatusBar(combat)}
@@ -399,6 +419,7 @@ export function renderCombat(run: RunState, dispatch: Dispatch, rerender: () => 
       <button data-action="end-turn">End Turn</button>
     </div>
     ${picker ? renderPicker(picker, combat) : ''}
+    ${renderCombatForecast(combat)}
     ${renderLog(run)}
   `;
   root.addEventListener('click', (ev) => handleClick(ev, combat, dispatch, rerender));
