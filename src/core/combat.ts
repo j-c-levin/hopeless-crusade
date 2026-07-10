@@ -1,8 +1,9 @@
 import { CONFIG } from '../content/config';
-import { elementDef } from '../content/elements';
+import { elementDef, type Atom } from '../content/elements';
 import { findCard, nextId, removeCard, type IdGen } from './cards';
-import { forgeTier2, forgeTier3, tier2Target, tier3DefId } from './forge';
+import { forgeTier2, forgeTier3, tier2Target, tier3DefId, unmerge } from './forge';
 import type { Rng } from './rng';
+import { COLOUR_ELEMENT } from './types';
 import type {
   Card, CombatState, Enemy, EnemySpec, ForgedCard, GameEvent,
 } from './types';
@@ -180,6 +181,14 @@ function doScrap(
   cs: CombatState, rng: Rng, idGen: IdGen,
   cmd: Extract<CombatCommand, { type: 'scrap' }>, events: GameEvent[],
 ): void {
+  if (cmd.cardId === '') {
+    if (cs.freeMerges <= 0) throw new Error('illegal: no free merge available');
+    if (!cmd.mergeCardIds?.length) throw new Error('illegal: free merge needs mergeCardIds');
+    assertLegalMerge(cs, cmd.mergeCardIds); // validate before consuming the free merge
+    cs.freeMerges -= 1;
+    performMerge(cs, idGen, cmd.mergeCardIds, events);
+    return;
+  }
   if (cs.scrapSealed) throw new Error('illegal: scrapping is sealed');
   const card = findCard(cs.hand, cmd.cardId);
   if (card.kind !== 'raw') throw new Error('illegal: only raws scrap');
@@ -259,11 +268,119 @@ function doHailMary(
   dealToEnemy(cs, cmd.targetEnemyId, CONFIG.hailMaryDamage, events);
 }
 
-// placeholders overwritten by Tasks 9–10 (declared so the switch compiles):
-function doActivate(_cs: CombatState, _rng: Rng, _idGen: IdGen,
-  _cmd: Extract<CombatCommand, { type: 'activate' }>, _events: GameEvent[]): void {
-  throw new Error('illegal: not implemented until Task 9');
+function doActivate(
+  cs: CombatState, rng: Rng, idGen: IdGen,
+  cmd: Extract<CombatCommand, { type: 'activate' }>, events: GameEvent[],
+): void {
+  const card = findCard(cs.hand, cmd.cardId);
+  if (card.kind !== 'forged') throw new Error('illegal: only forged cards activate');
+  if (cs.activatedThisRound.includes(card.id)) throw new Error('illegal: already activated this round');
+  const def = elementDef(card.defId);
+  const elements = card.colours.map((c) => COLOUR_ELEMENT[c]);
+  if (elements.some((e) => cs.lockedElements.includes(e))) throw new Error('illegal: element locked');
+  // fuel — strict colour matching (spec §3.2); Task 11 adds famished surcharge.
+  // Validate fuel and every atom's prerequisites BEFORE paying fuel or mutating anything:
+  // rejection must leave state untouched.
+  const cost = def.fuelCost;
+  if (cmd.fuelIds.length !== cost) throw new Error(`illegal: fuel count ${cmd.fuelIds.length} ≠ ${cost}`);
+  if (new Set(cmd.fuelIds).size !== cmd.fuelIds.length) throw new Error('illegal: fuel cards must be distinct');
+  const fuel = cmd.fuelIds.map((id) => findCard(cs.hand, id));
+  if (!fuel.every((f) => f.kind === 'raw' && card.colours.includes(f.colour))) {
+    throw new Error('illegal: fuel must be raws matching the card colours');
+  }
+  assertAtomsRunnable(cs, def.onActivate, cmd);
+  for (const f of fuel) { removeCard(cs.hand, f.id); cs.discardPile.push(f); }
+  events.push({ type: 'activate', text: `${def.name} awakens.`, data: { defId: def.id } });
+  runAtoms(cs, rng, idGen, card, def.onActivate, cmd, events);
+  cs.activatedThisRound.push(card.id);
+  cs.activationCounts[card.defId] = (cs.activationCounts[card.defId] ?? 0) + 1;
+  // Task 10 wires followups.onActivated(cs, rng, idGen, card, events) here.
 }
+
+// Pre-validation pass: throws 'illegal: ...' for any atom whose prerequisites aren't met,
+// before fuel is paid or anything is mutated. runAtoms then executes assuming validity.
+function assertAtomsRunnable(
+  cs: CombatState, atoms: Atom[], cmd: Extract<CombatCommand, { type: 'activate' }>,
+): void {
+  for (const atom of atoms) {
+    switch (atom.op) {
+      case 'damage':
+        if (!livingEnemy(cs, cmd.targetEnemyId)) throw new Error('illegal: damage needs a living target');
+        break;
+      case 'attach': {
+        const target = findCard(cs.hand, cmd.cardId) as ForgedCard;
+        const def = elementDef(target.defId);
+        if (!def.defender && !livingEnemy(cs, cmd.targetEnemyId)) {
+          throw new Error('illegal: attach needs a living target');
+        }
+        break;
+      }
+      case 'decombine': {
+        if (!cmd.decombineTargetId) throw new Error('illegal: decombine needs a target card');
+        const target = cs.hand.find((c) => c.id === cmd.decombineTargetId);
+        if (!target || target.kind !== 'forged') {
+          throw new Error('illegal: decombine target must be a forged card in hand');
+        }
+        if (!cmd.burnConstituentId || !target.constituents.some((c) => c.id === cmd.burnConstituentId)) {
+          throw new Error('illegal: burnConstituentId must be a constituent of the decombine target');
+        }
+        break;
+      }
+      case 'discard': {
+        const ids = cmd.discardIds ?? [];
+        if (ids.length !== atom.amount || new Set(ids).size !== ids.length
+            || !ids.every((id) => cs.hand.some((c) => c.id === id))) {
+          throw new Error('illegal: discard needs exactly the right discardIds present in hand');
+        }
+        break;
+      }
+      default: break;
+    }
+  }
+}
+
+function runAtoms(
+  cs: CombatState, rng: Rng, idGen: IdGen, card: ForgedCard, atoms: Atom[],
+  cmd: Extract<CombatCommand, { type: 'activate' }>, events: GameEvent[],
+): void {
+  const def = elementDef(card.defId);
+  for (const atom of atoms) {
+    switch (atom.op) {
+      case 'damage': {
+        dealToEnemy(cs, cmd.targetEnemyId!, atom.amount, events, card.defId === 'smoke' ? 'smoke' : undefined);
+        break;
+      }
+      case 'draw': drawCards(cs, rng, idGen, atom.amount, events, card); break;
+      case 'block': cs.block += atom.amount; break;
+      case 'attach': {
+        removeCard(cs.hand, card.id);
+        cs.attachedCards.push(card);
+        if (def.defender) {
+          cs.defenders.push({ cardId: card.id, defId: card.defId, hp: def.defender.health });
+        } else {
+          const enemy = cs.enemies.find((e) => e.id === cmd.targetEnemyId)!;
+          enemy.attachments.push({ cardId: card.id, defId: card.defId });
+        }
+        break;
+      }
+      case 'decombine': {
+        const target = findCard(cs.hand, cmd.decombineTargetId!) as ForgedCard;
+        const { returned } = unmerge(target, cmd.burnConstituentId!);
+        removeCard(cs.hand, target.id);
+        cs.hand.push(...returned);
+        events.push({ type: 'decombine', text: `${target.defId} comes apart.`, data: { cardId: target.id } });
+        break;
+      }
+      case 'discard': {
+        for (const id of cmd.discardIds!) { cs.discardPile.push(removeCard(cs.hand, id)); }
+        break;
+      }
+      case 'charge': cs.charges[card.defId] = (cs.charges[card.defId] ?? 0) + 1; break;
+      case 'freeMerge': cs.freeMerges += 1; break;
+    }
+  }
+}
+
 function doFreeDecombine(_cs: CombatState,
   _cmd: Extract<CombatCommand, { type: 'decombine' }>, _events: GameEvent[]): void {
   throw new Error('illegal: not implemented until Task 10');
