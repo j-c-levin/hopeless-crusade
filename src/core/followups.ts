@@ -1,9 +1,19 @@
 import { CONFIG } from '../content/config';
-import { elementDef } from '../content/elements';
+import { ELEMENTS, elementDef } from '../content/elements';
 import { dealToEnemy, drawCards, lowestHpEnemy } from './combat';
+import { PAIR_DEF } from './forge';
 import type { IdGen } from './cards';
 import type { Rng } from './rng';
 import type { CombatState, ForgedCard, GameEvent } from './types';
+
+// Water- or air-coloured defIds, derived from content: tier-2 water/air variants
+// plus every tier-3 pairing that includes water or air (per PAIR_DEF).
+const WET_DEFS: ReadonlySet<string> = new Set([
+  ...Object.keys(ELEMENTS).filter((id) => id.startsWith('water-') || id.startsWith('air-')),
+  ...Object.entries(PAIR_DEF)
+    .filter(([pair]) => pair.includes('water') || pair.includes('air'))
+    .map(([, defId]) => defId),
+]);
 
 export function onActivated(
   cs: CombatState, rng: Rng, idGen: IdGen, card: ForgedCard, events: GameEvent[],
@@ -49,9 +59,7 @@ function maybeFlood(cs: CombatState, rng: Rng, idGen: IdGen, events: GameEvent[]
   if (!rain) return;
   let wet = 0;
   for (const [defId, n] of Object.entries(cs.activationCounts)) {
-    const d = elementDef(defId);
-    if (d.id.startsWith('water') || d.id.startsWith('air')
-      || ['wind', 'rain', 'lake', 'steam', 'smoke', 'dust'].includes(d.id)) wet += n;
+    if (WET_DEFS.has(defId)) wet += n;
   }
   if (wet === 3) {
     events.push({ type: 'followup', text: 'The flood breaks.', data: { defId: 'rain' } });
@@ -66,6 +74,7 @@ export function getDeflection(cs: CombatState): number {
   const dust = Math.min(cs.charges['dust'] ?? 0, CONFIG.dustDeflectTable.length - 1);
   d += CONFIG.dustDeflectTable[dust]!;
   const attached = cs.enemies.flatMap((e) => e.attachments);
+  // spec: 1 per attached card (any element), gated on 2+ land
   if (attached.filter((a) => a.defId === 'land').length >= 2) d += attached.length;
   return d;
 }
@@ -76,7 +85,8 @@ export function onEndOfRound(cs: CombatState, rng: Rng, idGen: IdGen, events: Ga
   if (vol >= CONFIG.volcanoEruptThreshold) {
     let dmg = 3 + vol;
     events.push({ type: 'followup', text: 'The volcano erupts!', data: { defId: 'volcano' } });
-    const targets = () => cs.enemies.filter((e) => e.hp > 0).slice(0, vol);
+    const targets = () => cs.enemies.filter((e) => e.hp > 0)
+      .sort((a, b) => a.hp - b.hp).slice(0, vol);
     while (dmg > 0 && targets().length > 0) {
       const t = targets().reduce((a, b) => (b.hp < a.hp ? b : a));
       dealToEnemy(cs, t.id, 1, events);

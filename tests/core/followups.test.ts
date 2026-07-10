@@ -40,6 +40,25 @@ describe('followups', () => {
     expect(cs.hp).toBe(20 - Math.max(0, 4 - 3)); // stronghold power 4 − deflect 3
   });
 
+  it('eruption falls on the lowest-hp enemies regardless of array order', () => {
+    const cs = startCombat({
+      deck: makeStartingDeck({ n: 1 }), hp: 20, handSize: 5,
+      enemies: [
+        { suit: 'clubs', rank: 'stronghold', hp: 20 },
+        { suit: 'clubs', rank: 'tower', hp: 5 },
+        { suit: 'clubs', rank: 'tower', hp: 3 }, // lowest-hp enemy is LAST in the array
+      ],
+      struggles: [], relics: [], rng: new Rng(1), idGen: { n: 1000 },
+    });
+    cs.hand = [];
+    cs.charges['volcano'] = 2; // eruption: 3 + 2 = 5 damage across the 2 lowest-hp enemies
+    const events: GameEvent[] = [];
+    endTurn(cs, new Rng(2), { n: 2000 }, events);
+    expect(cs.enemies[0]!.hp).toBe(20); // highest-hp enemy untouched
+    expect(cs.enemies[2]!.hp).toBe(0);  // hp-3 enemy dies
+    expect(cs.enemies[1]!.hp).toBe(3);  // hp-5 enemy takes the remaining 2
+  });
+
   it('ocean grants a free decombine on the 2nd lake activation', () => {
     const cs = setup();
     const lakeA = forgeTier3(t2('l1', 'green'), t2('l2', 'green'), 'lakeA');
