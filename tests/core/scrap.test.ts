@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { Rng } from '../../src/core/rng';
 import { makeStartingDeck } from '../../src/core/cards';
 import { startCombat, combatCommand } from '../../src/core/combat';
+import { forgeTier2 } from '../../src/core/forge';
 import type { CombatState, RawCard } from '../../src/core/types';
 
 const raw = (id: string, colour: RawCard['colour'], value: number): RawCard => ({
@@ -48,6 +49,31 @@ describe('scrap and hail mary', () => {
     cs.scrapSealed = false;
     expect(() => combatCommand(cs, new Rng(2), { n: 2000 },
       { type: 'scrap', cardId: 'nope' })).toThrow();
+    // forged cards cannot scrap
+    cs.hand.push(forgeTier2([raw('f1', 'red', 3), raw('f2', 'red', 4)], 'fx'));
+    expect(() => combatCommand(cs, new Rng(2), { n: 2000 },
+      { type: 'scrap', cardId: 'fx', targetEnemyId: cs.enemies[0]!.id })).toThrow(/only raws/);
+  });
+
+  it('rejected scraps consume nothing — the card stays in hand', () => {
+    const cs = setup();
+    cs.hand = [raw('g', 'green', 1), raw('a', 'red', 2), raw('b', 'blue', 5), raw('r', 'red', 4)];
+    // green scrap whose mergeCardIds are mixed-colour / wrong-total
+    expect(() => combatCommand(cs, new Rng(2), { n: 2000 },
+      { type: 'scrap', cardId: 'g', mergeCardIds: ['a', 'b'] })).toThrow(/valid merge/);
+    expect(cs.hand.map((c) => c.id)).toEqual(['g', 'a', 'b', 'r']);
+    expect(cs.discardPile).toHaveLength(0);
+    // red scrap with no target
+    expect(() => combatCommand(cs, new Rng(2), { n: 2000 },
+      { type: 'scrap', cardId: 'r' })).toThrow();
+    expect(cs.hand.map((c) => c.id)).toEqual(['g', 'a', 'b', 'r']);
+    expect(cs.discardPile).toHaveLength(0);
+    // hail mary at a dead enemy consumes nothing either
+    cs.enemies[0]!.hp = 0;
+    cs.outcome = 'ongoing'; // keep combat open despite the dead enemy (checkOutcome not run)
+    expect(() => combatCommand(cs, new Rng(2), { n: 2000 },
+      { type: 'hailMary', cardIds: ['g', 'a', 'b'], targetEnemyId: cs.enemies[0]!.id })).toThrow();
+    expect(cs.hand).toHaveLength(4);
   });
 
   it('hail mary burns three raws for 1 damage — permanently', () => {
