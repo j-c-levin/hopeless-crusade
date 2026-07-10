@@ -85,7 +85,7 @@ function manifestationPower(_suit: string): number {
 }
 
 // sourceDefId identifies the forged card whose effect is drawing these cards (only used for
-// onDrawDamage, e.g. air-7..9/wind/monsoon); omit for draws with no such source (opening hand,
+// onDrawDamage, e.g. air-7..9/wind/rain); omit for draws with no such source (opening hand,
 // end-of-round refill, blue scrap).
 export function drawCards(
   cs: CombatState, rng: Rng, idGen: IdGen, n: number,
