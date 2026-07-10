@@ -210,9 +210,12 @@ function applyPenalty(
         cs.hp -= 4;
         events.push({ type: 'player-damaged', text: 'The reaper collects.', data: { amount: 4 } });
         checkOutcome(cs);
-        for (let i = 0; i < 2; i++) {
-          const t = randomHandCard(cs, rng);
-          if (t) addMark(t, 'doomed', events);
+        // Doom two DISTINCT cards: build the pool once, remove each pick before the next roll.
+        // If fewer than 2 candidates exist, mark whatever is available.
+        const pool = cs.hand.filter((c) => c.kind !== 'corruption');
+        for (let i = 0; i < 2 && pool.length > 0; i++) {
+          const t = pool.splice(rng.int(pool.length), 1)[0]!;
+          addMark(t, 'doomed', events);
         }
       }
       break;

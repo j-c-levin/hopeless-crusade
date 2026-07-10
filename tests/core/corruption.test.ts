@@ -45,6 +45,18 @@ describe('corruption triggers', () => {
     expect(cs.drawPile.length).toBe(drawBefore - 2); // corruption drawn + one exiled
   });
 
+  it('death fortress "suffer" dooms two distinct cards', () => {
+    const cs = setup('spades');
+    // Shrink the hand to exactly 2 non-corruption cards: both MUST end doomed once each.
+    cs.drawPile.push(...cs.hand.splice(2));
+    drawCorruption(cs, 'spades', 'fortress');
+    expect(cs.pendingChoice).toBeDefined();
+    combatCommand(cs, new Rng(7), { n: 9300 }, { type: 'resolveChoice', optionId: 'suffer' });
+    expect(cs.hand).toHaveLength(2);
+    expect(cs.hand.every((c) => c.marks.doomed === 1)).toBe(true); // no double-doom on one card
+    expect(cs.hp).toBe(16);
+  });
+
   it('the corruption card lands in the discard pile, not the hand', () => {
     const cs = setup('clubs');
     drawCorruption(cs, 'clubs', 'tower');

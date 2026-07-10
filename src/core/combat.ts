@@ -105,7 +105,6 @@ export function dealToEnemy(
   if (cs.recoil) {
     cs.hp -= 1;
     events.push({ type: 'recoil', text: 'The war corruption bites back.' });
-    checkOutcome(cs);
   }
   checkOutcome(cs);
 }
