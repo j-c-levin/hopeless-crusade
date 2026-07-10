@@ -80,6 +80,90 @@ describe('run state machine — integration', () => {
     expect(restored.phase).toBe('combat');
   });
 
+  it('tutor (diamonds reward) puts the chosen card into the next fight opening hand', () => {
+    const run = newRun(5);
+    runCommand(run, { type: 'chooseOrigin', defId: run.originOptions![0]! });
+
+    // win the first fight (cheat the enemy dead with a red raw)
+    const easyNode = nodesInColumn(run.map.current, 0)[0]!;
+    runCommand(run, { type: 'moveTo', nodeId: easyNode.id });
+    if (run.combat!.pendingChoice) {
+      const pc = run.combat!.pendingChoice;
+      runCommand(run, { type: 'combat', cmd: { type: 'resolveChoice', optionId: pc.options[0]!.id } });
+    }
+    run.combat!.enemies[0]!.hp = 1;
+    const killer: RawCard = { kind: 'raw', id: 'test-killer', colour: 'red', value: 3, marks: {} };
+    run.combat!.hand.push(killer);
+    runCommand(run, {
+      type: 'combat',
+      cmd: { type: 'scrap', cardId: killer.id, targetEnemyId: run.combat!.enemies[0]!.id },
+    });
+    expect(run.phase).toBe('rewards');
+
+    // force a diamonds suit choice so tutor is purchasable, and tutor a clean raw from the deck
+    run.pendingRewards!.suitChoices = ['diamonds'];
+    const target = run.deck.find((c) => isRaw(c) && Object.keys(c.marks).length === 0)!;
+    runCommand(run, { type: 'reward', suitIndex: 0, cmd: { type: 'tutor', cardId: target.id } });
+    expect(run.tutoredIds).toEqual([target.id]);
+    expect(run.phase).toBe('forgeWindow');
+    runCommand(run, { type: 'closeWindow' });
+    expect(run.phase).toBe('map');
+
+    // next fight: the tutored card must be drawn first, i.e. be in the opening hand
+    const nextNode = nodesInColumn(run.map.current, 1)[0]!;
+    runCommand(run, { type: 'moveTo', nodeId: nextNode.id });
+    if (run.phase === 'strugglePick') {
+      const opts = run.struggleOptions!;
+      for (let i = 0; i < opts.pick; i++) {
+        runCommand(run, { type: 'toggleStruggle', id: opts.options[i]!.id });
+      }
+      runCommand(run, { type: 'confirmStruggles' });
+    }
+    expect(run.phase).toBe('combat');
+    expect(run.combat!.hand.some((c) => c.id === target.id)).toBe(true);
+    expect(run.tutoredIds).toEqual([]); // consumed
+  });
+
+  it('serializes and deserializes mid-combat, and the revived fight plays on', () => {
+    const run = newRun(6);
+    runCommand(run, { type: 'chooseOrigin', defId: run.originOptions![0]! });
+    const easyNode = nodesInColumn(run.map.current, 0)[0]!;
+    runCommand(run, { type: 'moveTo', nodeId: easyNode.id });
+    expect(run.phase).toBe('combat');
+    if (run.combat!.pendingChoice) {
+      const pc = run.combat!.pendingChoice;
+      runCommand(run, { type: 'combat', cmd: { type: 'resolveChoice', optionId: pc.options[0]!.id } });
+    }
+
+    // play at least one real combat command before snapshotting: scrap a yellow or blue raw
+    const scrapable = run.combat!.hand.find(
+      (c): c is RawCard => isRaw(c) && (c.colour === 'yellow' || c.colour === 'blue'),
+    );
+    if (scrapable) {
+      runCommand(run, { type: 'combat', cmd: { type: 'scrap', cardId: scrapable.id } });
+    } else {
+      runCommand(run, { type: 'combat', cmd: { type: 'endTurn' } });
+    }
+    expect(run.phase).toBe('combat');
+    // ensure marks are exercised by the round-trip too
+    run.combat!.hand[0]!.marks.scarred = 1;
+
+    const json = serialize(run);
+    const restored = deserialize(json);
+    expect(restored).toEqual(run);
+
+    // the revived combat accepts a further command
+    if (restored.combat!.pendingChoice) {
+      const pc = restored.combat!.pendingChoice;
+      expect(() => runCommand(restored, {
+        type: 'combat', cmd: { type: 'resolveChoice', optionId: pc.options[0]!.id },
+      })).not.toThrow();
+    } else {
+      expect(() => runCommand(restored, { type: 'combat', cmd: { type: 'endTurn' } })).not.toThrow();
+    }
+    expect(['combat', 'rewards', 'defeat']).toContain(restored.phase);
+  });
+
   it('throws on commands issued in the wrong phase, without mutating state', () => {
     const run = newRun(3);
     expect(run.phase).toBe('originDraft');

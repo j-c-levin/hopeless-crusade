@@ -123,16 +123,8 @@ function beginCombat(run: RunState, node: MapNode, struggleIds: string[]): GameE
     deck: combatDeck, hp: run.hp, handSize,
     enemies: specs, struggles: struggleIds, relics: run.relics,
     rng, idGen: run.idGen,
+    topIds: run.tutoredIds, // consumed: surfaced atop the draw pile before the opening draw
   });
-  // Consume tutored cards: surface them atop the draw pile (drawn from the end — see combat.ts).
-  // Push in reverse so the first-tutored card ends up on top (drawn first).
-  for (const id of [...run.tutoredIds].reverse()) {
-    const idx = cs.drawPile.findIndex((c) => c.id === id);
-    if (idx >= 0) {
-      const [card] = cs.drawPile.splice(idx, 1);
-      cs.drawPile.push(card!);
-    }
-  }
   run.tutoredIds = [];
   run.combat = cs;
   run.phase = 'combat';
@@ -249,7 +241,7 @@ export function runCommand(run: RunState, cmd: RunCommand): GameEvent[] {
       const count = Math.max(0, rawCount - run.struggleRelief);
       run.struggleRelief = 0; // consumed by this move
       if (count === 0) {
-        run.rngState = rng.state;
+        // no rng consumed on this path — beginCombat reconstructs from run.rngState itself
         events.push(...beginCombat(run, node, []));
       } else {
         const dealt = dealStruggleChoices(rng, run.map.current.domain, count);
@@ -360,6 +352,7 @@ export function runCommand(run: RunState, cmd: RunCommand): GameEvent[] {
 
     case 'closeWindow': {
       if (run.phase !== 'forgeWindow') throw new Error('illegal: not in forge window');
+      if (!run.window) throw new Error('illegal: no window open');
       const node = currentNode(run);
       const isBoss = node.column === run.map.current.columns - 1;
       run.window = undefined;

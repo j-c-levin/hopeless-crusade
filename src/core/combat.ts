@@ -36,6 +36,7 @@ export function startCombat(opts: {
   deck: Card[]; hp: number; handSize: number;
   enemies: EnemySpec[]; struggles: string[]; relics: string[];
   rng: Rng; idGen: IdGen;
+  topIds?: string[];   // tutored cards: surfaced atop the shuffled draw pile, first-listed drawn first
 }): CombatState {
   const siege = opts.struggles.includes('siege') ? 1 : 0;
   const enemies: Enemy[] = opts.enemies.map((e) => ({
@@ -56,6 +57,13 @@ export function startCombat(opts: {
     emberheartUsed: false, springwellUsed: false, tidalCharmUsed: false,
     elementActivations: { fire: 0, earth: 0, air: 0, water: 0 },
   };
+  // Tutored cards surface atop the shuffled draw pile BEFORE the opening draw. The pile is
+  // drawn by pop() (the end is the top), so iterate topIds in reverse: the first-listed card
+  // ends up last in the array and is drawn first. Ids not found in the pile skip silently.
+  for (const id of [...(opts.topIds ?? [])].reverse()) {
+    const idx = cs.drawPile.findIndex((c) => c.id === id);
+    if (idx >= 0) cs.drawPile.push(cs.drawPile.splice(idx, 1)[0]!);
+  }
   const manif = enemies.find((e) => e.rank === 'manifestation');
   if (manif?.suit === 'diamonds') cs.clock = CONFIG.manifestationClock;
   if (manif?.suit === 'hearts') cs.plagueAura = true;
