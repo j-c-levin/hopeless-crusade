@@ -2,6 +2,7 @@ import { CONFIG } from '../content/config';
 import { elementDef, type Atom } from '../content/elements';
 import { findCard, nextId, removeCard, type IdGen } from './cards';
 import { forgeTier2, forgeTier3, tier2Target, tier3DefId, unmerge } from './forge';
+import { onActivated, onEndOfRound, getDeflection } from './followups';
 import type { Rng } from './rng';
 import { COLOUR_ELEMENT } from './types';
 import type {
@@ -100,7 +101,8 @@ export function dealToEnemy(
 
 export function endTurn(cs: CombatState, rng: Rng, idGen: IdGen, events: GameEvent[]): void {
   if (cs.outcome !== 'ongoing') return;
-  // Task 10 adds end-of-round followups (eruption, deflection) via followups.ts here.
+  onEndOfRound(cs, rng, idGen, events);
+  let deflect = getDeflection(cs);
   for (const enemy of cs.enemies.filter((e) => e.hp > 0)) {
     // retaliation from attachments — auto-targets the attacker (v1 simplification)
     for (const att of enemy.attachments) {
@@ -109,6 +111,8 @@ export function endTurn(cs: CombatState, rng: Rng, idGen: IdGen, events: GameEve
     }
     if (enemy.hp <= 0) continue;
     let incoming = enemy.power;
+    const used = Math.min(deflect, incoming);
+    deflect -= used; incoming -= used;
     for (const d of cs.defenders) {
       if (incoming <= 0) break;
       const soak = Math.min(d.hp, incoming);
@@ -294,7 +298,7 @@ function doActivate(
   runAtoms(cs, rng, idGen, card, def.onActivate, cmd, events);
   cs.activatedThisRound.push(card.id);
   cs.activationCounts[card.defId] = (cs.activationCounts[card.defId] ?? 0) + 1;
-  // Task 10 wires followups.onActivated(cs, rng, idGen, card, events) here.
+  onActivated(cs, rng, idGen, card, events);
 }
 
 // Pre-validation pass: throws 'illegal: ...' for any atom whose prerequisites aren't met,
@@ -386,7 +390,16 @@ function runAtoms(
   }
 }
 
-function doFreeDecombine(_cs: CombatState,
-  _cmd: Extract<CombatCommand, { type: 'decombine' }>, _events: GameEvent[]): void {
-  throw new Error('illegal: not implemented until Task 10');
+function doFreeDecombine(
+  cs: CombatState, cmd: Extract<CombatCommand, { type: 'decombine' }>, events: GameEvent[],
+): void {
+  if (cs.freeDecombines <= 0) throw new Error('illegal: no free decombine');
+  const target = findCard(cs.hand, cmd.cardId);
+  if (target.kind !== 'forged') throw new Error('illegal: decombine targets forged cards');
+  if (!cmd.burnConstituentId) throw new Error('illegal: decombine needs burnConstituentId');
+  const { returned } = unmerge(target, cmd.burnConstituentId);
+  removeCard(cs.hand, target.id);
+  cs.hand.push(...returned);
+  cs.freeDecombines -= 1;
+  events.push({ type: 'decombine', text: `${target.defId} comes apart.`, data: { cardId: target.id } });
 }
