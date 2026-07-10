@@ -33,19 +33,55 @@ const POOL_RANKS: Record<string, number[]> = {
   easy: [2, 3, 4, 5], med: [6, 7, 8, 9, 10], hard: [11, 12, 13],
 };
 
-function zoneBag(map: CampaignMap, domainSuits: Suit[], zone: string, rng: Rng): PlayingCard[] {
-  const pools = zone.includes('-') ? zone.split('-') : [zone];
-  const bag: PlayingCard[] = [];
+/** When a zone's own bag runs dry, widen to adjacent pools (same living suits) in this order. */
+const WIDEN_ORDER: Record<string, string[]> = {
+  easy: ['med', 'hard'],
+  med: ['easy', 'hard'],
+  hard: ['med', 'easy'],
+  'easy-med': ['hard'],
+  'med-hard': ['easy'],
+};
+
+function undealtCards(
+  map: CampaignMap, suits: readonly Suit[], pools: string[], taken: PlayingCard[],
+): PlayingCard[] {
+  const out: PlayingCard[] = [];
   for (const pool of pools) {
-    const poolName = pool === 'easy' || pool === 'med' || pool === 'hard' ? pool : pool;
-    for (const suit of domainSuits) {
-      for (const rank of POOL_RANKS[poolName]!) {
-        const card = { suit, rank };
-        if (!map.dealt.some((d) => d.suit === suit && d.rank === rank)) bag.push(card);
+    for (const suit of suits) {
+      for (const rank of POOL_RANKS[pool]!) {
+        const used =
+          map.dealt.some((d) => d.suit === suit && d.rank === rank) ||
+          taken.some((d) => d.suit === suit && d.rank === rank);
+        if (!used) out.push({ suit, rank });
       }
     }
   }
-  return rng.shuffle(bag);
+  return out;
+}
+
+/**
+ * Draw up to `need` cards for a zone, widening in stages when the bag underflows:
+ * the zone's own pools, then adjacent difficulty pools of the living suits, then
+ * any undealt non-ace card from the full 52-card deck. Each stage is shuffled
+ * before drawing so all randomness flows through the passed Rng.
+ */
+function drawZoneCards(
+  map: CampaignMap, domainSuits: Suit[], zone: string, need: number, rng: Rng,
+): PlayingCard[] {
+  const basePools = zone.includes('-') ? zone.split('-') : [zone];
+  const stages: { suits: readonly Suit[]; pools: string[] }[] = [
+    { suits: domainSuits, pools: basePools },
+    ...(WIDEN_ORDER[zone] ?? []).map((pool) => ({ suits: domainSuits, pools: [pool] })),
+    // echoes of fallen domains — last-resort supply so nodes are never empty
+    { suits: ALL_SUITS, pools: ['easy', 'med', 'hard'] },
+  ];
+  const taken: PlayingCard[] = [];
+  for (const stage of stages) {
+    if (taken.length >= need) break;
+    const bag = rng.shuffle(undealtCards(map, stage.suits, stage.pools, taken));
+    taken.push(...bag.slice(0, need - taken.length));
+  }
+  return taken;
 }
 
 function classifyRank(rank: number): RankClass {
@@ -58,8 +94,24 @@ function classifyRank(rank: number): RankClass {
 export function generateLevel(map: CampaignMap, rng: Rng): LevelMap {
   const domain = map.domainOrder[map.level]!;
   const domainSuits = ALL_SUITS.filter((s) => !map.defeated.includes(s));
-  const nodes: MapNode[] = [];
 
+  // Two-phase deal so a supply shortage degrades per-node card count instead of
+  // emptying whole nodes: phase 1 secures one card per node across every zone,
+  // phase 2 tops up to cardsPerNode while the deck can still supply.
+  const zoneCards: PlayingCard[][] = TEMPLATE.map(() => []);
+  for (const phase of [1, 2] as const) {
+    TEMPLATE.forEach((spec, column) => {
+      if (spec.zone === 'boss') return;
+      const target = phase === 1 ? spec.nodes : spec.nodes * spec.cardsPerNode;
+      const want = target - zoneCards[column]!.length;
+      if (want <= 0) return;
+      const drawn = drawZoneCards(map, domainSuits, spec.zone, want, rng);
+      zoneCards[column]!.push(...drawn);
+      map.dealt.push(...drawn);
+    });
+  }
+
+  const nodes: MapNode[] = [];
   TEMPLATE.forEach((spec, column) => {
     if (spec.zone === 'boss') {
       const card: PlayingCard = { suit: domain, rank: 14 };
@@ -74,18 +126,16 @@ export function generateLevel(map: CampaignMap, rng: Rng): LevelMap {
       return;
     }
 
-    const need = spec.nodes * spec.cardsPerNode;
-    const bag = zoneBag(map, domainSuits, spec.zone, rng);
-    const drawn = bag.slice(0, need);
-    for (const card of drawn) map.dealt.push(card);
+    // Round-robin so a partial phase-2 top-up spreads evenly across the zone's nodes.
+    const perNode: PlayingCard[][] = Array.from({ length: spec.nodes }, () => []);
+    zoneCards[column]!.forEach((card, idx) => perNode[idx % spec.nodes]!.push(card));
 
     for (let i = 0; i < spec.nodes; i++) {
-      const cards = drawn.slice(i * spec.cardsPerNode, (i + 1) * spec.cardsPerNode);
       nodes.push({
         id: `L${map.level}C${column}N${i}`,
         column,
         zone: spec.zone,
-        cards,
+        cards: perNode[i]!,
         revealed: false,
       });
     }

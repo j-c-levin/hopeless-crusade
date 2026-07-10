@@ -36,6 +36,49 @@ describe('campaign map', () => {
     expect(onLevelCleared(map, new Rng(5))).toBe('victory');
   });
 
+  it('degrades gracefully when the spades pool is nearly exhausted', () => {
+    const map = newCampaign(new Rng(7));
+    // Pre-mark 7 spades not already dealt. 7 is the arithmetic maximum that
+    // still guarantees one card per node: natural non-ace demand through
+    // level 2 is 33, and 48 - 33 - 7 = 8 = one card per non-boss node on the
+    // pure-spades level 3.
+    let marked = 0;
+    for (let rank = 2; rank <= 13 && marked < 7; rank++) {
+      if (!map.dealt.some((d) => d.suit === 'spades' && d.rank === rank)) {
+        map.dealt.push({ suit: 'spades', rank });
+        marked++;
+      }
+    }
+    expect(marked).toBe(7);
+    onLevelCleared(map, new Rng(8));
+    onLevelCleared(map, new Rng(9));
+    onLevelCleared(map, new Rng(10));
+    expect(map.level).toBe(3);
+    expect(map.current.domain).toBe('spades');
+    for (const node of map.current.nodes) {
+      expect(node.cards.length).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it('full campaigns never deal empty nodes or duplicate cards', () => {
+    for (let seed = 1; seed <= 5; seed++) {
+      const map = newCampaign(new Rng(seed));
+      const checkLevel = () => {
+        for (const node of map.current.nodes) {
+          expect(node.cards.length).toBeGreaterThanOrEqual(1);
+        }
+      };
+      checkLevel();
+      for (let i = 0; i < 3; i++) {
+        expect(onLevelCleared(map, new Rng(seed * 100 + i))).toBe('nextLevel');
+        checkLevel();
+      }
+      expect(map.dealt.length).toBeLessThanOrEqual(52);
+      const keys = new Set(map.dealt.map((c) => `${c.suit}:${c.rank}`));
+      expect(keys.size).toBe(map.dealt.length);
+    }
+  });
+
   it('advance only moves to the next column', () => {
     const map = newCampaign(new Rng(6));
     const start = nodesInColumn(map.current, 0)[0]!;
